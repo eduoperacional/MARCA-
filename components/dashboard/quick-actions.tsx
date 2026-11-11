@@ -29,8 +29,8 @@ function TileContent({ action }: { action: QuickAction }) {
   )
 }
 
-export function QuickActions() {
-  const shareBookingLink = useShareBookingLink()
+export function QuickActions({ bookingSlug }: { bookingSlug?: string }) {
+  const shareBookingLink = useShareBookingLink(bookingSlug)
 
   return (
     <section aria-labelledby="quick-actions-title" className="flex flex-col gap-3">

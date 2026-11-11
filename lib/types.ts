@@ -1,9 +1,22 @@
 export type AppointmentStatus =
-  | "confirmed"
   | "pending"
+  | "confirmed"
   | "in_progress"
   | "completed"
   | "cancelled"
+  | "no_show"
+
+export type PaymentMethod = "cash" | "pix" | "debit" | "credit" | "other"
+
+/** Jornada de um dia da semana (0 = domingo). Horários no formato HH:mm. */
+export interface DaySchedule {
+  weekday: number
+  active: boolean
+  start: string
+  end: string
+  breakStart?: string | null
+  breakEnd?: string | null
+}
 
 export interface Professional {
   id: string
@@ -18,14 +31,25 @@ export interface Service {
   durationMin: number
 }
 
+/** Agendamento já resolvido para exibição (horários locais HH:mm). */
 export interface Appointment {
   id: string
+  date: string
   start: string
   end: string
+  startsAt: string
+  endsAt: string
+  clientId: string
   clientName: string
+  clientPhone: string
   service: Pick<Service, "id" | "name" | "price" | "durationMin">
-  professional: Pick<Professional, "id" | "name">
+  professional: Pick<Professional, "id" | "name"> & { color: string }
   status: AppointmentStatus
+  price: number
+  paidAmount: number
+  paymentMethod: PaymentMethod | null
+  notes: string | null
+  source: "admin" | "online"
 }
 
 export type PeriodKey = "today" | "7d" | "30d" | "month" | "custom"
@@ -77,9 +101,9 @@ export interface StatusSlice {
 }
 
 export interface PerformanceSummary {
-  topService: { name: string; count: number; revenue: number }
-  topProfessional: { name: string; role: string; count: number; share: number }
-  peakHour: { label: string; share: number }
+  topService: { name: string; count: number; revenue: number } | null
+  topProfessional: { name: string; role: string; count: number; share: number } | null
+  peakHour: { label: string; share: number } | null
   averageTicket: { value: number; previous: number }
 }
 
