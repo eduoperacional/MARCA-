@@ -58,34 +58,44 @@ export function PerformanceSummary({ summary }: { summary: Summary }) {
         <SummaryRow
           icon={Scissors}
           label="Serviço mais realizado"
-          value={summary.topService.name}
-          detail={`${formatNumber(summary.topService.count)} atendimentos · ${formatCurrency(summary.topService.revenue)}`}
+          value={summary.topService?.name ?? "Sem atendimentos"}
+          detail={
+            summary.topService
+              ? `${formatNumber(summary.topService.count)} atendimentos · ${formatCurrency(summary.topService.revenue)}`
+              : "Nenhum serviço concluído no período"
+          }
         />
         <Separator />
         <div className="flex flex-col gap-3">
           <SummaryRow
             icon={Award}
             label="Profissional com mais atendimentos"
-            value={summary.topProfessional.name}
-            detail={`${summary.topProfessional.role} · ${formatNumber(summary.topProfessional.count)} atendimentos`}
+            value={summary.topProfessional?.name ?? "Sem atendimentos"}
+            detail={
+              summary.topProfessional
+                ? `${summary.topProfessional.role} · ${formatNumber(summary.topProfessional.count)} atendimentos`
+                : "Nenhum atendimento no período"
+            }
           />
-          <div className="flex items-center gap-3 pl-12">
-            <Progress
-              value={Math.round(summary.topProfessional.share * 100)}
-              className="flex-1"
-              aria-label="Participação nos atendimentos"
-            />
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {formatPercent(summary.topProfessional.share)}
-            </span>
-          </div>
+          {summary.topProfessional && (
+            <div className="flex items-center gap-3 pl-12">
+              <Progress
+                value={Math.round(summary.topProfessional.share * 100)}
+                className="flex-1"
+                aria-label="Participação nos atendimentos"
+              />
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {formatPercent(summary.topProfessional.share)}
+              </span>
+            </div>
+          )}
         </div>
         <Separator />
         <SummaryRow
           icon={Clock}
           label="Horário de maior movimento"
-          value={summary.peakHour.label}
-          detail={`${formatPercent(summary.peakHour.share)} dos atendimentos`}
+          value={summary.peakHour?.label ?? "—"}
+          detail={summary.peakHour ? `${formatPercent(summary.peakHour.share)} dos atendimentos` : "Sem dados no período"}
         />
         <Separator />
         <SummaryRow

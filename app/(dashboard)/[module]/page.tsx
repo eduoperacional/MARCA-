@@ -4,8 +4,10 @@ import { notFound } from "next/navigation"
 import { ModulePlaceholder } from "@/components/modules/module-placeholder"
 import { NAV_ITEMS, getModuleBySlug } from "@/config/navigation"
 
+const PLACEHOLDER_MODULES = new Set(["/marketing", "/ajuda"])
+
 export function generateStaticParams() {
-  return NAV_ITEMS.filter((item) => item.href !== "/").map((item) => ({
+  return NAV_ITEMS.filter((item) => PLACEHOLDER_MODULES.has(item.href)).map((item) => ({
     module: item.href.slice(1),
   }))
 }
