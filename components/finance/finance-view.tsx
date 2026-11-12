@@ -43,10 +43,10 @@ export function FinanceView({
   const kpis = [
     { label: "Recebido", value: overview.received, hint: "Pagamentos registrados", tone: "text-success" },
     { label: "A receber", value: overview.pending, hint: `${overview.pendingPayments.length} atendimentos sem pagamento`, tone: overview.pending > 0 ? "text-warning" : "" },
-    { label: "Faturamento previsto", value: overview.forecast, hint: "Realizado + agendado no período" },
+    { label: "Faturado", value: overview.realized, hint: `${overview.completedCount} atendimentos concluídos` },
     { label: "Despesas", value: overview.expenses, hint: `${overview.expenseItems.length} lançamentos` },
-    { label: "Lucro estimado", value: overview.profit, hint: "Recebido − despesas", tone: overview.profit < 0 ? "text-destructive" : "" },
-    { label: "Ticket médio", value: overview.averageTicket, hint: "Por atendimento concluído" },
+    { label: "Resultado estimado", value: overview.profit, hint: "Recebido − despesas", tone: overview.profit < 0 ? "text-destructive" : "" },
+    { label: "Previsto (agendado)", value: overview.scheduled, hint: `${overview.scheduledCount} ainda não realizados`, tone: "text-muted-foreground" },
   ]
 
   return (

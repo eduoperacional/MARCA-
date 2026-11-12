@@ -4,6 +4,8 @@ import { PeriodFilter } from "@/components/dashboard/period-filter"
 import { PageHeader } from "@/components/layout/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Info } from "lucide-react"
 import { formatCurrency, formatPercent } from "@/lib/format"
 import type { PeriodSelection } from "@/lib/period"
 
@@ -23,14 +25,46 @@ export interface ReportData {
 }
 
 export function ReportsView({ data, selection, today }: { data: ReportData; selection: PeriodSelection; today: string }) {
-  const cancelRate = data.total ? (data.cancelled + data.noShow) / data.total : 0
+  const cancelRate = data.total ? data.cancelled / data.total : 0
+  const noShowBase = data.total - data.cancelled
+  const noShowRate = noShowBase > 0 ? data.noShow / noShowBase : 0
   const kpis = [
-    { label: "Agendamentos", value: String(data.total), hint: `${data.completed} concluídos` },
-    { label: "Faturamento", value: formatCurrency(data.revenue), hint: `Ticket médio ${formatCurrency(data.averageTicket)}` },
-    { label: "Taxa de ocupação", value: formatPercent(data.occupancy * 100), hint: "Horas agendadas / disponíveis" },
-    { label: "Cancelamentos e faltas", value: String(data.cancelled + data.noShow), hint: `${formatPercent(cancelRate * 100)} do total` },
-    { label: "Clientes novos", value: String(data.newClients), hint: "Primeira visita no período" },
-    { label: "Clientes recorrentes", value: String(data.returningClients), hint: "Já tinham visitado antes" },
+    {
+      label: "Agendamentos",
+      value: String(data.total),
+      hint: `${data.completed} concluídos`,
+      info: "Todos os agendamentos com início no período, em qualquer status.",
+    },
+    {
+      label: "Faturamento",
+      value: formatCurrency(data.revenue),
+      hint: `Ticket médio ${formatCurrency(data.averageTicket)}`,
+      info: "Soma dos atendimentos concluídos. Ticket médio = faturamento ÷ atendimentos concluídos.",
+    },
+    {
+      label: "Taxa de ocupação",
+      value: formatPercent(data.occupancy * 100),
+      hint: "Tempo agendado ÷ disponível",
+      info: "Minutos de atendimentos ativos ou concluídos divididos pela jornada da equipe ativa (sem intervalos). Limitada a 100%.",
+    },
+    {
+      label: "Cancelamentos",
+      value: String(data.cancelled),
+      hint: `${formatPercent(cancelRate * 100)} dos agendamentos`,
+      info: "Agendamentos cancelados ÷ total de agendamentos do período.",
+    },
+    {
+      label: "Faltas",
+      value: String(data.noShow),
+      hint: `${formatPercent(noShowRate * 100)} dos não cancelados`,
+      info: "Clientes que não compareceram ÷ agendamentos que não foram cancelados.",
+    },
+    {
+      label: "Clientes novos · recorrentes",
+      value: `${data.newClients} · ${data.returningClients}`,
+      hint: "Atendidos no período",
+      info: "Novo: primeira visita caiu dentro do período. Recorrente: já tinha visita anterior.",
+    },
   ]
   const maxService = Math.max(1, ...data.services.map((s) => s.count))
   const maxProfessional = Math.max(1, ...data.professionals.map((p) => p.revenue))
@@ -45,7 +79,20 @@ export function ReportsView({ data, selection, today }: { data: ReportData; sele
         {kpis.map((k) => (
           <Card key={k.label} className="gap-1 py-4">
             <CardContent className="flex flex-col gap-1 px-4">
-              <span className="text-xs text-muted-foreground">{k.label}</span>
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                {k.label}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button type="button" className="rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" />
+                    }
+                  >
+                    <Info className="size-3.5" aria-hidden="true" />
+                    <span className="sr-only">Como é calculado: {k.label}</span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-64">{k.info}</TooltipContent>
+                </Tooltip>
+              </span>
               <span className="font-heading text-xl font-semibold tabular-nums">{k.value}</span>
               <span className="text-xs text-muted-foreground">{k.hint}</span>
             </CardContent>

@@ -25,8 +25,16 @@ import { dateFromLocal } from "@/lib/time"
 import type { Appointment, AppointmentStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-type Tab = "upcoming" | "past" | "all"
+type Tab = "today" | "upcoming" | "past" | "cancelled" | "no_show"
 const ALL = "all"
+
+const TAB_ITEMS: { value: Tab; label: string; empty: string }[] = [
+  { value: "today", label: "Hoje", empty: "Nenhum atendimento marcado para hoje." },
+  { value: "upcoming", label: "Próximos", empty: "Nenhum atendimento futuro encontrado." },
+  { value: "past", label: "Histórico", empty: "Nenhum atendimento anterior encontrado." },
+  { value: "cancelled", label: "Cancelados", empty: "Nenhum cancelamento encontrado." },
+  { value: "no_show", label: "Faltas", empty: "Nenhum cliente faltou no período." },
+]
 
 interface Filters {
   q: string
@@ -84,12 +92,21 @@ export function AppointmentsView({
       />
 
       <div className="flex flex-col gap-3">
-        <Tabs value={tab} onValueChange={(value) => setParams({ tab: value === "upcoming" ? null : String(value), from: null, to: null })}>
-          <TabsList>
-            <TabsTrigger value="upcoming">Próximos</TabsTrigger>
-            <TabsTrigger value="past">Histórico</TabsTrigger>
-            <TabsTrigger value="all">Todos</TabsTrigger>
-          </TabsList>
+        <Tabs
+          value={tab}
+          onValueChange={(value) =>
+            setParams({ tab: value === "upcoming" ? null : String(value), from: null, to: null, status: null })
+          }
+        >
+          <div className="-mx-1 overflow-x-auto px-1">
+            <TabsList>
+              {TAB_ITEMS.map((t) => (
+                <TabsTrigger key={t.value} value={t.value}>
+                  {t.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
         </Tabs>
 
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
@@ -112,21 +129,25 @@ export function AppointmentsView({
             />
           </form>
           <div className="flex flex-wrap items-center gap-2">
-            <Input
-              type="date"
-              aria-label="Data inicial"
-              className="w-38"
-              value={filters.from}
-              onChange={(e) => setParams({ from: e.target.value || null })}
-            />
-            <span className="text-sm text-muted-foreground">até</span>
-            <Input
-              type="date"
-              aria-label="Data final"
-              className="w-38"
-              value={filters.to}
-              onChange={(e) => setParams({ to: e.target.value || null })}
-            />
+            {tab !== "today" && (
+              <>
+                <Input
+                  type="date"
+                  aria-label="Data inicial"
+                  className="w-38"
+                  value={filters.from}
+                  onChange={(e) => setParams({ from: e.target.value || null })}
+                />
+                <span className="text-sm text-muted-foreground">até</span>
+                <Input
+                  type="date"
+                  aria-label="Data final"
+                  className="w-38"
+                  value={filters.to}
+                  onChange={(e) => setParams({ to: e.target.value || null })}
+                />
+              </>
+            )}
             <Select items={professionalItems} value={filters.professional || ALL} onValueChange={(v) => setParams({ professional: v === ALL ? null : v })}>
               <SelectTrigger className="w-48" aria-label="Profissional">
                 <SelectValue />
@@ -141,20 +162,22 @@ export function AppointmentsView({
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <Select items={statusItems} value={filters.status || ALL} onValueChange={(v) => setParams({ status: v === ALL ? null : v })}>
-              <SelectTrigger className="w-44" aria-label="Status">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {statusItems.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+            {tab !== "cancelled" && tab !== "no_show" && (
+              <Select items={statusItems} value={filters.status || ALL} onValueChange={(v) => setParams({ status: v === ALL ? null : v })}>
+                <SelectTrigger className="w-44" aria-label="Status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {statusItems.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            )}
             {hasFilters && (
               <Button
                 variant="ghost"
@@ -181,7 +204,11 @@ export function AppointmentsView({
                   <CalendarSearch />
                 </EmptyMedia>
                 <EmptyTitle>Nenhum agendamento encontrado</EmptyTitle>
-                <EmptyDescription>Ajuste os filtros ou crie um novo agendamento.</EmptyDescription>
+                <EmptyDescription>
+                  {hasFilters
+                    ? "Nenhum resultado para os filtros aplicados. Ajuste ou limpe os filtros."
+                    : TAB_ITEMS.find((t) => t.value === tab)?.empty}
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (

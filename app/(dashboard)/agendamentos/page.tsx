@@ -11,17 +11,19 @@ import type { AppointmentStatus } from "@/lib/types"
 export const metadata: Metadata = { title: "Agendamentos" }
 
 const STATUSES: AppointmentStatus[] = ["pending", "confirmed", "in_progress", "completed", "cancelled", "no_show"]
-export type AppointmentsTab = "upcoming" | "past" | "all"
+const TABS = ["today", "upcoming", "past", "cancelled", "no_show"] as const
+export type AppointmentsTab = (typeof TABS)[number]
 
 export default async function AppointmentsPage({ searchParams }: PageProps<"/agendamentos">) {
   const params = await searchParams
   const business = await getCurrentBusiness()
   const today = todayLocal()
 
-  const tabParam = firstParam(params.tab)
-  const tab: AppointmentsTab = tabParam === "past" || tabParam === "all" ? tabParam : "upcoming"
+  const tabParam = firstParam(params.tab) as AppointmentsTab | undefined
+  const tab: AppointmentsTab = tabParam && TABS.includes(tabParam) ? tabParam : "upcoming"
   const statusParam = firstParam(params.status) as AppointmentStatus | undefined
-  const status = statusParam && STATUSES.includes(statusParam) ? statusParam : undefined
+  const tabStatus = tab === "cancelled" || tab === "no_show" ? tab : undefined
+  const status = tabStatus ?? (statusParam && STATUSES.includes(statusParam) ? statusParam : undefined)
   const query = firstParam(params.q)?.trim().slice(0, 80) || undefined
   const professionalId = firstParam(params.professional) || undefined
   const fromParam = firstParam(params.from)
@@ -35,11 +37,14 @@ export default async function AppointmentsPage({ searchParams }: PageProps<"/age
   }
   if (isValidLocalDate(fromParam)) filters.from = fromParam
   if (isValidLocalDate(toParam)) filters.to = toParam
-  if (!filters.from && !filters.to) {
+  if (tab === "today") {
+    filters.from = today
+    filters.to = today
+  } else if (!filters.from && !filters.to) {
     if (tab === "upcoming") filters.from = today
     if (tab === "past") filters.to = addDays(today, -1)
   }
-  filters.order = tab === "upcoming" ? "asc" : "desc"
+  filters.order = tab === "upcoming" || tab === "today" ? "asc" : "desc"
 
   const [appointments, options] = await Promise.all([listAppointments(business.id, filters), getFormOptions(business.id)])
 
@@ -48,7 +53,7 @@ export default async function AppointmentsPage({ searchParams }: PageProps<"/age
       appointments={appointments}
       options={options}
       tab={tab}
-      filters={{ q: query ?? "", status: status ?? "", professional: professionalId ?? "", from: fromParam ?? "", to: toParam ?? "" }}
+      filters={{ q: query ?? "", status: tabStatus ? "" : (status ?? ""), professional: professionalId ?? "", from: fromParam ?? "", to: toParam ?? "" }}
       openCreate={firstParam(params.novo) === "1"}
     />
   )

@@ -82,7 +82,9 @@ export async function getFinanceOverview(businessId: string, range: LocalRange) 
 
   return {
     realized,
-    forecast: realized + upcoming.reduce((sum, a) => sum + a.price, 0),
+    scheduled: upcoming.reduce((sum, a) => sum + a.price, 0),
+    scheduledCount: upcoming.length,
+    completedCount: completed.length,
     received,
     pending: pendingPayments.reduce((sum, a) => sum + (a.price - a.paidAmount), 0),
     expenses: expensesTotal,
