@@ -13,6 +13,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useServerAction } from "@/hooks/use-server-action"
 import type { DaySchedule } from "@/lib/types"
 
@@ -70,11 +71,19 @@ export function SettingsForm({
         </Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
-        <div className="flex flex-col gap-6">
+      <Tabs defaultValue="estabelecimento" className="gap-6">
+        <TabsList className="h-auto w-full flex-wrap justify-start sm:w-fit">
+          <TabsTrigger value="estabelecimento">Estabelecimento</TabsTrigger>
+          <TabsTrigger value="funcionamento">Funcionamento</TabsTrigger>
+          <TabsTrigger value="online">Agendamento online</TabsTrigger>
+          <TabsTrigger value="notificacoes">Notificações</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="estabelecimento" keepMounted className="max-w-2xl data-[hidden]:hidden">
           <Card>
             <CardHeader>
               <CardTitle>Estabelecimento</CardTitle>
+              <CardDescription>Aparece na página pública e nas comunicações com seus clientes.</CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup>
@@ -93,7 +102,24 @@ export function SettingsForm({
               </FieldGroup>
             </CardContent>
           </Card>
+        </TabsContent>
 
+        <TabsContent value="funcionamento" keepMounted className="max-w-3xl data-[hidden]:hidden">
+          <Card>
+            <CardHeader>
+              <CardTitle>Horário de funcionamento</CardTitle>
+              <CardDescription>
+                A agenda e a página pública só oferecem horários dentro deste período. Para folgas e feriados, use
+                &quot;Bloquear horário&quot; na Agenda.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ScheduleEditor idPrefix="business-hours" value={values.openingHours} onChange={(next) => set("openingHours", next)} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="online" keepMounted className="max-w-2xl data-[hidden]:hidden">
           <Card>
             <CardHeader>
               <CardTitle>Agendamento online</CardTitle>
@@ -151,7 +177,9 @@ export function SettingsForm({
               </FieldGroup>
             </CardContent>
           </Card>
+        </TabsContent>
 
+        <TabsContent value="notificacoes" keepMounted className="max-w-2xl data-[hidden]:hidden">
           <Card>
             <CardHeader>
               <div className="flex flex-wrap items-center gap-2">
@@ -174,18 +202,8 @@ export function SettingsForm({
               </p>
             </CardContent>
           </Card>
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Horário de funcionamento</CardTitle>
-            <CardDescription>A agenda e a página pública só oferecem horários dentro deste período.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ScheduleEditor idPrefix="business-hours" value={values.openingHours} onChange={(next) => set("openingHours", next)} />
-          </CardContent>
-        </Card>
-      </div>
+        </TabsContent>
+      </Tabs>
     </form>
   )
 }

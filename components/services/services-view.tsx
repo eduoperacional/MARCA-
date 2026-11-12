@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useServerAction } from "@/hooks/use-server-action"
@@ -116,11 +117,7 @@ function ServiceRow({ service: s, professionalNames, onEdit }: { service: Servic
           {professionalNames.length ? professionalNames.join(", ") : "Nenhum profissional habilitado"}
         </span>
       </div>
-      <span className="hidden items-center gap-1 text-sm text-muted-foreground tabular-nums sm:flex">
-        <Clock className="size-3.5" aria-hidden="true" />
-        {s.durationMin} min
-      </span>
-      <span className="w-24 text-right font-medium tabular-nums">{formatCurrency(s.price, true)}</span>
+      <QuickEdit service={s} />
       <Switch
         checked={s.active}
         disabled={pending}
@@ -131,6 +128,84 @@ function ServiceRow({ service: s, professionalNames, onEdit }: { service: Servic
         <Pencil />
       </Button>
     </li>
+  )
+}
+
+function QuickEdit({ service: s }: { service: ServiceItem }) {
+  const [open, setOpen] = useState(false)
+  const [price, setPrice] = useState(String(s.price).replace(".", ","))
+  const [duration, setDuration] = useState(String(s.durationMin))
+  const { pending, run } = useServerAction()
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) {
+          setPrice(String(s.price).replace(".", ","))
+          setDuration(String(s.durationMin))
+        }
+      }}
+    >
+      <PopoverTrigger
+        render={<Button variant="ghost" size="sm" className="h-auto gap-3 px-2 py-1 tabular-nums" />}
+        aria-label={`Alterar preço e duração de ${s.name}`}
+      >
+        <span className="hidden items-center gap-1 text-sm text-muted-foreground sm:flex">
+          <Clock className="size-3.5" aria-hidden="true" />
+          {s.durationMin} min
+        </span>
+        <span className="min-w-20 text-right font-medium">{formatCurrency(s.price, true)}</span>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64">
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            run(
+              () =>
+                saveService({
+                  id: s.id,
+                  name: s.name,
+                  category: s.category,
+                  description: s.description ?? "",
+                  price: Number(price.replace(",", ".")),
+                  durationMin: Number(duration),
+                  active: s.active,
+                  professionalIds: s.professionalIds,
+                }),
+              "Serviço atualizado.",
+              () => setOpen(false)
+            )
+          }}
+        >
+          <p className="text-sm font-medium">{s.name}</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field>
+              <FieldLabel htmlFor={`qe-price-${s.id}`}>Preço (R$)</FieldLabel>
+              <Input id={`qe-price-${s.id}`} inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} required />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`qe-dur-${s.id}`}>Duração</FieldLabel>
+              <Input
+                id={`qe-dur-${s.id}`}
+                type="number"
+                min={5}
+                max={600}
+                step={5}
+                value={duration}
+                onChange={(e) => setDuration(e.target.value)}
+                required
+              />
+            </Field>
+          </div>
+          <Button type="submit" size="sm" disabled={pending}>
+            Salvar
+          </Button>
+        </form>
+      </PopoverContent>
+    </Popover>
   )
 }
 
