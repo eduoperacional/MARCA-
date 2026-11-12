@@ -112,7 +112,7 @@ function toLocalInterval(date: string, startsAt: Date, endsAt: Date): Interval {
 }
 
 /** Ocupação (agendamentos ativos + bloqueios) por profissional em um dia. */
-async function loadBusy(businessId: string, professionalIds: string[], date: string, excludeAppointmentId?: string) {
+export async function loadBusy(businessId: string, professionalIds: string[], date: string, excludeAppointmentId?: string) {
   const dayStart = toInstant(date)
   const dayEnd = toInstant(addDays(date, 1))
 
