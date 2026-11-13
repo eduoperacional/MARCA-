@@ -10,6 +10,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 
+import type { MemberRole, Permission } from "@/lib/permissions"
 import type { AppointmentStatus, DaySchedule, PaymentMethod } from "@/lib/types"
 
 const createdAt = () =>
@@ -26,6 +27,16 @@ export const businesses = pgTable("businesses", {
   slotIntervalMin: integer("slot_interval_min").notNull().default(15),
   onlineBookingEnabled: boolean("online_booking_enabled").notNull().default(true),
   minAdvanceMin: integer("min_advance_min").notNull().default(60),
+  displayName: text("display_name"),
+  description: text("description"),
+  city: text("city"),
+  state: text("state"),
+  logoUrl: text("logo_url"),
+  coverUrl: text("cover_url"),
+  primaryColor: text("primary_color").notNull().default("#7B3FF2"),
+  ownerUserId: text("owner_user_id"),
+  onboardingStep: integer("onboarding_step").notNull().default(1),
+  onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
   createdAt: createdAt(),
 })
 
@@ -135,6 +146,61 @@ export const notifications = pgTable("notifications", {
   createdAt: createdAt(),
 })
 
+/* ------------------------- Contas, equipe e convites ------------------------ */
+
+/** Tabela de usuários do Better Auth (somente leitura pelo app; escrita via Better Auth). */
+export const users = pgTable("user", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  emailVerified: boolean("emailVerified").notNull(),
+  image: text("image"),
+  phone: text("phone"),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull(),
+})
+
+export const businessMembers = pgTable("business_members", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  userId: text("user_id").notNull(),
+  role: text("role").$type<MemberRole>().notNull(),
+  permissions: jsonb("permissions").$type<Permission[]>().notNull().default([]),
+  professionalId: uuid("professional_id"),
+  active: boolean("active").notNull().default(true),
+  createdAt: createdAt(),
+})
+
+export const invitations = pgTable("invitations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  email: text("email").notNull(),
+  role: text("role").$type<MemberRole>().notNull(),
+  permissions: jsonb("permissions").$type<Permission[]>().notNull().default([]),
+  professionalId: uuid("professional_id"),
+  tokenHash: text("token_hash").notNull(),
+  invitedBy: text("invited_by").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: createdAt(),
+})
+
+export const userPreferences = pgTable("user_preferences", {
+  userId: text("user_id").primaryKey(),
+  notifyNewBooking: boolean("notify_new_booking").notNull().default(true),
+  notifyCancellation: boolean("notify_cancellation").notNull().default(true),
+  weeklySummary: boolean("weekly_summary").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const appRateLimits = pgTable("app_rate_limits", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull(),
+  resetAt: timestamp("reset_at", { withTimezone: true }).notNull(),
+})
+
+export type MemberRow = typeof businessMembers.$inferSelect
+export type InvitationRow = typeof invitations.$inferSelect
 export type BusinessRow = typeof businesses.$inferSelect
 export type ProfessionalRow = typeof professionals.$inferSelect
 export type ServiceRow = typeof services.$inferSelect

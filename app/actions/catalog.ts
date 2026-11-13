@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { and, eq, inArray } from "drizzle-orm"
 
 import { cleanText, fail, isTime, isUuid, toCents } from "@/lib/actions/result"
-import { getCurrentBusiness } from "@/lib/business"
+import { authorize, NO_PERMISSION } from "@/lib/business"
 import { db } from "@/lib/db"
 import { appointments, clients, professionalServices, professionals, services } from "@/lib/db/schema"
 import { isValidPhone, normalizePhone } from "@/lib/phone"
@@ -28,7 +28,9 @@ export interface ClientInput {
 }
 
 export async function saveClient(input: ClientInput) {
-  const business = await getCurrentBusiness()
+  const access = await authorize("clients.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const name = cleanText(input.name, 120)
   if (!name) return fail("Informe o nome do cliente.")
   if (!isValidPhone(input.phone)) return fail("Informe um telefone válido com DDD.")
@@ -56,7 +58,9 @@ export async function saveClient(input: ClientInput) {
 
 export async function deleteClient(id: string) {
   if (!isUuid(id)) return fail("Cliente inválido.")
-  const business = await getCurrentBusiness()
+  const access = await authorize("clients.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const [linked] = await db.select({ id: appointments.id }).from(appointments).where(eq(appointments.clientId, id)).limit(1)
   if (linked) return fail("Este cliente possui histórico de agendamentos e não pode ser excluído.")
   await db.delete(clients).where(and(eq(clients.id, id), eq(clients.businessId, business.id)))
@@ -111,7 +115,9 @@ export interface ProfessionalInput {
 }
 
 export async function saveProfessional(input: ProfessionalInput) {
-  const business = await getCurrentBusiness()
+  const access = await authorize("professionals.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const name = cleanText(input.name, 120)
   if (!name) return fail("Informe o nome do profissional.")
   if (input.phone && !isValidPhone(input.phone)) return fail("Telefone inválido.")
@@ -158,7 +164,9 @@ export async function saveProfessional(input: ProfessionalInput) {
 
 export async function setProfessionalActive(id: string, active: boolean) {
   if (!isUuid(id)) return fail("Profissional inválido.")
-  const business = await getCurrentBusiness()
+  const access = await authorize("professionals.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   await db.update(professionals).set({ active }).where(and(eq(professionals.id, id), eq(professionals.businessId, business.id)))
   return done()
 }
@@ -177,7 +185,9 @@ export interface ServiceInput {
 }
 
 export async function saveService(input: ServiceInput) {
-  const business = await getCurrentBusiness()
+  const access = await authorize("services.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const name = cleanText(input.name, 120)
   if (!name) return fail("Informe o nome do serviço.")
   const priceCents = toCents(input.price)
@@ -223,7 +233,9 @@ export async function saveService(input: ServiceInput) {
 
 export async function setServiceActive(id: string, active: boolean) {
   if (!isUuid(id)) return fail("Serviço inválido.")
-  const business = await getCurrentBusiness()
+  const access = await authorize("services.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   await db.update(services).set({ active }).where(and(eq(services.id, id), eq(services.businessId, business.id)))
   return done()
 }

@@ -7,7 +7,7 @@ import { cleanText, fail, isOverlapError, isTime, isUuid, toCents } from "@/lib/
 import { STATUS_TRANSITIONS, PAYMENT_METHODS } from "@/lib/appointment-status"
 import { notify } from "@/lib/automations"
 import { validateSlot } from "@/lib/availability"
-import { getCurrentBusiness } from "@/lib/business"
+import { authorize, NO_PERMISSION } from "@/lib/business"
 import { db } from "@/lib/db"
 import { appointments, clients, payments, professionalServices, professionals, services } from "@/lib/db/schema"
 import { isValidPhone, normalizePhone } from "@/lib/phone"
@@ -56,7 +56,12 @@ async function resolveClientId(businessId: string, input: AppointmentInput) {
 }
 
 export async function saveAppointment(input: AppointmentInput) {
-  const business = await getCurrentBusiness()
+  const access = await authorize("appointments.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
+  if (!access.permissions.has("agenda.view_all") && access.professionalId !== input.professionalId) {
+    return fail(NO_PERMISSION)
+  }
 
   if (input.id && !isUuid(input.id)) return fail("Agendamento inválido.")
   if (!isUuid(input.serviceId)) return fail("Selecione um serviço.")
@@ -162,12 +167,17 @@ export async function updateAppointmentStatus(
   payment?: { method: PaymentMethod; amount: number } | null
 ) {
   if (!isUuid(id)) return fail("Agendamento inválido.")
-  const business = await getCurrentBusiness()
+  const access = await authorize(status === "cancelled" || status === "pending" || status === "confirmed" ? "appointments.manage" : "appointments.status")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const [appointment] = await db
     .select()
     .from(appointments)
     .where(and(eq(appointments.id, id), eq(appointments.businessId, business.id)))
   if (!appointment) return fail("Agendamento não encontrado.")
+  if (!access.permissions.has("agenda.view_all") && appointment.professionalId !== access.professionalId) {
+    return fail(NO_PERMISSION)
+  }
   if (!STATUS_TRANSITIONS[appointment.status].includes(status)) {
     return fail("Esta mudança de status não é permitida.")
   }
@@ -236,10 +246,13 @@ export async function registerPayment(appointmentId: string, method: PaymentMeth
   const amountCents = toCents(amount)
   if (!amountCents) return fail("Informe um valor válido.")
 
-  const business = await getCurrentBusiness()
+  const access = await authorize("appointments.status")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const [appointment] = await db
     .select({
       id: appointments.id,
+      professionalId: appointments.professionalId,
       status: appointments.status,
       priceCents: appointments.priceCents,
       paid: sql<number>`coalesce((select sum(p.amount_cents) from payments p where p.appointment_id = ${appointments.id}), 0)::int`,
@@ -247,6 +260,9 @@ export async function registerPayment(appointmentId: string, method: PaymentMeth
     .from(appointments)
     .where(and(eq(appointments.id, appointmentId), eq(appointments.businessId, business.id)))
   if (!appointment) return fail("Agendamento não encontrado.")
+  if (!access.permissions.has("agenda.view_all") && appointment.professionalId !== access.professionalId) {
+    return fail(NO_PERMISSION)
+  }
   if (appointment.status === "cancelled" || appointment.status === "no_show") {
     return fail("Não é possível registrar pagamento para agendamentos cancelados.")
   }

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { and, eq, isNull } from "drizzle-orm"
 
 import { cleanText, fail, isTime, isUuid, toCents } from "@/lib/actions/result"
-import { getCurrentBusiness } from "@/lib/business"
+import { authorize, NO_PERMISSION } from "@/lib/business"
 import { db } from "@/lib/db"
 import { businesses, expenses, notifications, professionals, timeBlocks } from "@/lib/db/schema"
 import { isValidLocalDate, timeToMinutes, toInstant } from "@/lib/time"
@@ -24,7 +24,9 @@ export async function createTimeBlock(input: {
   end: string
   reason?: string | null
 }) {
-  const business = await getCurrentBusiness()
+  const access = await authorize()
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   if (!isValidLocalDate(input.date)) return fail("Data inválida.")
   if (!isTime(input.start) || !isTime(input.end) || timeToMinutes(input.end) <= timeToMinutes(input.start)) {
     return fail("O horário final deve ser depois do inicial.")
@@ -49,7 +51,9 @@ export async function createTimeBlock(input: {
 
 export async function deleteTimeBlock(id: string) {
   if (!isUuid(id)) return fail("Bloqueio inválido.")
-  const business = await getCurrentBusiness()
+  const access = await authorize()
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   await db.delete(timeBlocks).where(and(eq(timeBlocks.id, id), eq(timeBlocks.businessId, business.id)))
   return done()
 }
@@ -57,7 +61,9 @@ export async function deleteTimeBlock(id: string) {
 /* --------------------------------- Despesas ---------------------------------- */
 
 export async function createExpense(input: { description: string; category: string; amount: number; date: string }) {
-  const business = await getCurrentBusiness()
+  const access = await authorize("finance.view")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const description = cleanText(input.description, 200)
   if (!description) return fail("Informe a descrição da despesa.")
   const amountCents = toCents(input.amount)
@@ -75,7 +81,9 @@ export async function createExpense(input: { description: string; category: stri
 
 export async function deleteExpense(id: string) {
   if (!isUuid(id)) return fail("Despesa inválida.")
-  const business = await getCurrentBusiness()
+  const access = await authorize("finance.view")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   await db.delete(expenses).where(and(eq(expenses.id, id), eq(expenses.businessId, business.id)))
   return done()
 }
@@ -91,7 +99,9 @@ export async function updateBusinessSettings(input: {
   minAdvanceMin: number
   onlineBookingEnabled: boolean
 }) {
-  const business = await getCurrentBusiness()
+  const access = await authorize("settings.manage")
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   const name = cleanText(input.name, 120)
   if (!name) return fail("Informe o nome do estabelecimento.")
   if (!Array.isArray(input.openingHours) || input.openingHours.length !== 7) return fail("Horários inválidos.")
@@ -132,7 +142,9 @@ export async function updateBusinessSettings(input: {
 
 export async function markNotificationRead(id: string) {
   if (!isUuid(id)) return fail("Notificação inválida.")
-  const business = await getCurrentBusiness()
+  const access = await authorize()
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   await db
     .update(notifications)
     .set({ readAt: new Date() })
@@ -141,7 +153,9 @@ export async function markNotificationRead(id: string) {
 }
 
 export async function markAllNotificationsRead() {
-  const business = await getCurrentBusiness()
+  const access = await authorize()
+  if (!access) return fail(NO_PERMISSION)
+  const business = access.business
   await db
     .update(notifications)
     .set({ readAt: new Date() })
