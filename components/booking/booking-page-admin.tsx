@@ -103,7 +103,7 @@ export function BookingPageAdmin({
               </dd>
             </div>
           </dl>
-          <Button variant="ghost" size="sm" className="self-start" render={<Link href="/configuracoes" />}>
+          <Button variant="ghost" size="sm" className="self-start" render={<Link href="/painel/configuracoes" />} nativeButton={false}>
             <Settings data-icon="inline-start" />
             Ajustar regras e horário de funcionamento
           </Button>

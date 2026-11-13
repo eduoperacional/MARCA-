@@ -48,7 +48,7 @@ export function ModulePlaceholder({ href }: { href: string }) {
               ))}
             </ul>
           )}
-          <Button variant="outline" render={<Link href="/" />} nativeButton={false}>
+          <Button variant="outline" render={<Link href="/painel" />} nativeButton={false}>
             <ArrowLeft data-icon="inline-start" />
             Voltar para a visão geral
           </Button>

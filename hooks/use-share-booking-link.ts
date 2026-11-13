@@ -3,9 +3,11 @@
 import { useCallback } from "react"
 import { toast } from "sonner"
 
-import { currentBusiness } from "@/config/business"
+import { useWorkspace } from "@/components/layout/workspace-context"
 
-export function useShareBookingLink(slug: string = currentBusiness.slug) {
+export function useShareBookingLink(slugOverride?: string) {
+  const { business } = useWorkspace()
+  const slug = slugOverride ?? business.slug
   return useCallback(async () => {
     const link = `${window.location.origin}/agendar/${slug}`
     try {

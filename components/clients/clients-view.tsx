@@ -120,7 +120,7 @@ export function ClientsView({
                 {clients.map((c) => (
                   <TableRow key={c.id} className="relative">
                     <TableCell className="pl-4">
-                      <Link href={`/clientes/${c.id}`} className="flex items-center gap-3 outline-none after:absolute after:inset-0 focus-visible:underline">
+                      <Link href={`/painel/clientes/${c.id}`} className="flex items-center gap-3 outline-none after:absolute after:inset-0 focus-visible:underline">
                         <Avatar className="size-8">
                           <AvatarFallback className="bg-muted text-xs">{getInitials(c.name)}</AvatarFallback>
                         </Avatar>

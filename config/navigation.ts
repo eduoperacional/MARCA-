@@ -11,8 +11,11 @@ import {
   UserRoundCog,
   Users,
   Wallet,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react"
+
+import type { Permission } from "@/lib/permissions"
 
 export interface NavItem {
   title: string
@@ -21,6 +24,8 @@ export interface NavItem {
   description: string
   /** Recursos planejados para o módulo — exibidos enquanto ele está em construção. */
   features?: string[]
+  /** Permissão necessária para exibir o item. */
+  permission?: Permission
 }
 
 export interface NavSection {
@@ -36,13 +41,13 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       {
         title: "Visão geral",
-        href: "/",
+        href: "/painel",
         icon: LayoutDashboard,
         description: "Acompanhe o desempenho do seu negócio.",
       },
       {
         title: "Agenda",
-        href: "/agenda",
+        href: "/painel/agenda",
         icon: CalendarDays,
         description: "Visualize e organize os horários de toda a equipe.",
         features: [
@@ -53,7 +58,7 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         title: "Agendamentos",
-        href: "/agendamentos",
+        href: "/painel/agendamentos",
         icon: CalendarCheck2,
         description: "Gerencie todos os agendamentos e seus status.",
         features: [
@@ -64,7 +69,8 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         title: "Clientes",
-        href: "/clientes",
+        href: "/painel/clientes",
+        permission: "clients.view",
         icon: Users,
         description: "Cadastro e histórico dos seus clientes.",
         features: [
@@ -75,7 +81,8 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         title: "Profissionais",
-        href: "/profissionais",
+        href: "/painel/profissionais",
+        permission: "professionals.manage",
         icon: UserRoundCog,
         description: "Equipe, horários de trabalho e comissões.",
         features: [
@@ -86,7 +93,8 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         title: "Serviços",
-        href: "/servicos",
+        href: "/painel/servicos",
+        permission: "services.manage",
         icon: Scissors,
         description: "Catálogo de serviços, preços e durações.",
         features: [
@@ -97,7 +105,8 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         title: "Página de agendamento",
-        href: "/pagina-de-agendamento",
+        href: "/painel/pagina-de-agendamento",
+        permission: "booking_page.manage",
         icon: Globe,
         description: "Sua página pública para clientes agendarem online.",
         features: [
@@ -114,7 +123,8 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       {
         title: "Financeiro",
-        href: "/financeiro",
+        href: "/painel/financeiro",
+        permission: "finance.view",
         icon: Wallet,
         description: "Receitas, despesas e fluxo de caixa.",
         features: [
@@ -125,7 +135,8 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         title: "Relatórios",
-        href: "/relatorios",
+        href: "/painel/relatorios",
+        permission: "reports.view",
         icon: BarChart3,
         description: "Análises detalhadas do seu negócio.",
         features: [
@@ -136,7 +147,8 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         title: "Marketing",
-        href: "/marketing",
+        href: "/painel/marketing",
+        permission: "settings.manage",
         icon: Megaphone,
         description: "Campanhas para atrair e reter clientes.",
         features: [
@@ -153,7 +165,8 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       {
         title: "Configurações",
-        href: "/configuracoes",
+        href: "/painel/configuracoes",
+        permission: "settings.manage",
         icon: Settings,
         description: "Dados do estabelecimento, conta e preferências.",
         features: [
@@ -163,8 +176,15 @@ export const NAV_SECTIONS: NavSection[] = [
         ],
       },
       {
+        title: "Equipe",
+        href: "/painel/equipe",
+        permission: "team.manage",
+        icon: ShieldCheck,
+        description: "Membros, convites e permissões de acesso.",
+      },
+      {
         title: "Ajuda e suporte",
-        href: "/ajuda",
+        href: "/painel/ajuda",
         icon: LifeBuoy,
         description: "Central de ajuda e contato com o suporte.",
         features: ["Tutoriais", "Perguntas frequentes", "Contato com o suporte"],
@@ -178,14 +198,15 @@ export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap(
 )
 
 export function getNavItem(pathname: string) {
+  if (pathname === "/painel/minha-conta") return { title: "Minha conta" } as NavItem
   return NAV_ITEMS.find((item) => item.href === pathname)
 }
 
 export function getModuleBySlug(slug: string) {
-  return NAV_ITEMS.find((item) => item.href === `/${slug}`)
+  return NAV_ITEMS.find((item) => item.href === `/painel/${slug}`)
 }
 
 export function isNavItemActive(item: NavItem, pathname: string) {
-  if (item.href === "/") return pathname === "/"
+  if (item.href === "/painel") return pathname === "/painel"
   return pathname === item.href || pathname.startsWith(`${item.href}/`)
 }

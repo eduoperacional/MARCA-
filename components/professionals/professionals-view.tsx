@@ -171,7 +171,7 @@ function ProfessionalCard({
           <Pencil data-icon="inline-start" />
           Editar
         </Button>
-        <Button variant="ghost" size="sm" className="flex-1" render={<Link href={`/agenda?professional=${p.id}`} />} nativeButton={false}>
+        <Button variant="ghost" size="sm" className="flex-1" render={<Link href={`/painel/agenda?professional=${p.id}`} />} nativeButton={false}>
           <CalendarDays data-icon="inline-start" />
           Ver agenda
         </Button>

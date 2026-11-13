@@ -69,7 +69,7 @@ export function DashboardOverview({
           <h2 id="period-title" className="font-heading text-sm font-medium text-muted-foreground">
             Desempenho no período · {describeRange(data.range)}
           </h2>
-          <Link href="/relatorios" className="text-xs font-medium text-brand-light hover:underline">
+          <Link href="/painel/relatorios" className="text-xs font-medium text-brand-light hover:underline">
             Ver relatórios completos
           </Link>
         </div>

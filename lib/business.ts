@@ -74,6 +74,18 @@ export const requireAccess = cache(async (): Promise<Access> => {
   return access
 })
 
+/** Grava o estabelecimento ativo; o vínculo é sempre revalidado em getAccess. */
+export async function setActiveBusiness(businessId: string) {
+  const isDev = process.env.NODE_ENV === "development"
+  ;(await cookies()).set(ACTIVE_BUSINESS_COOKIE, businessId, {
+    httpOnly: true,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365,
+    sameSite: isDev ? "none" : "lax",
+    secure: isDev || process.env.NODE_ENV === "production",
+  })
+}
+
 export function can(access: Access | null, permission: Permission) {
   return Boolean(access?.permissions.has(permission))
 }

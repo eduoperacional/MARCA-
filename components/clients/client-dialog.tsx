@@ -67,7 +67,7 @@ function ClientForm({
           client ? "Cliente atualizado." : "Cliente cadastrado.",
           (result) => {
             onClose()
-            if (!client && openAfterCreate && "id" in result && result.id) router.push(`/clientes/${result.id}`)
+            if (!client && openAfterCreate && "id" in result && result.id) router.push(`/painel/clientes/${result.id}`)
           }
         )
       }}
