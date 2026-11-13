@@ -9,11 +9,12 @@ import { UserMenu } from "@/components/layout/user-menu"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { currentBusiness } from "@/config/business"
+import { useWorkspace } from "@/components/layout/workspace-context"
 import { getNavItem } from "@/config/navigation"
 
 export function AppHeader() {
   const pathname = usePathname()
+  const { business } = useWorkspace()
   const title = getNavItem(pathname)?.title ?? "MARCAÍ"
 
   return (
@@ -23,7 +24,7 @@ export function AppHeader() {
       <div className="flex min-w-0 items-center gap-2">
         <span className="truncate font-heading text-sm font-medium">{title}</span>
         <Badge variant="outline" className="hidden text-muted-foreground xl:inline-flex">
-          {currentBusiness.name}
+          {business.name}
         </Badge>
       </div>
 

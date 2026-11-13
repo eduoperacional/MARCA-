@@ -117,7 +117,7 @@ export function TodaySchedule({
             </ol>
           </ScrollArea>
         )}
-        <Button variant="ghost" className="self-start" render={<Link href="/agenda" />} nativeButton={false}>
+        <Button variant="ghost" className="self-start" render={<Link href="/painel/agenda" />} nativeButton={false}>
           Ver agenda completa
           <ArrowRight data-icon="inline-end" />
         </Button>

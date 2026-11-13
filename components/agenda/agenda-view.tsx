@@ -81,7 +81,7 @@ export function AgendaView(props: AgendaViewProps) {
         description="Visualize e organize os horários da equipe."
         actions={
           <>
-            <Button variant="ghost" render={<Link href="/configuracoes" />} nativeButton={false}>
+            <Button variant="ghost" render={<Link href="/painel/configuracoes" />} nativeButton={false}>
               <Settings2 data-icon="inline-start" />
               Funcionamento
             </Button>
@@ -163,7 +163,7 @@ export function AgendaView(props: AgendaViewProps) {
           />
         ) : professionals.length === 0 ? (
           <p className="p-10 text-center text-sm text-muted-foreground">
-            Nenhum profissional ativo. Cadastre a equipe em <Link href="/profissionais" className="underline">Profissionais</Link>.
+            Nenhum profissional ativo. Cadastre a equipe em <Link href="/painel/profissionais" className="underline">Profissionais</Link>.
           </p>
         ) : (
           <AgendaGrid

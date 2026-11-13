@@ -54,7 +54,7 @@ export function ClientProfile({ client, history, options }: { client: ClientItem
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-      <Button variant="ghost" size="sm" className="self-start" render={<Link href="/clientes" />} nativeButton={false}>
+      <Button variant="ghost" size="sm" className="self-start" render={<Link href="/painel/clientes" />} nativeButton={false}>
         <ArrowLeft data-icon="inline-start" />
         Clientes
       </Button>
@@ -192,7 +192,7 @@ export function ClientProfile({ client, history, options }: { client: ClientItem
             <AlertDialogAction
               variant="destructive"
               disabled={pending}
-              onClick={() => run(() => deleteClient(client.id), "Cliente excluído.", () => router.push("/clientes"))}
+              onClick={() => run(() => deleteClient(client.id), "Cliente excluído.", () => router.push("/painel/clientes"))}
             >
               Excluir
             </AlertDialogAction>

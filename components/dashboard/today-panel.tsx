@@ -94,28 +94,28 @@ export function TodayPanel({
                 ? `${next.clientName} · ${next.professional.name}`
                 : "Nenhum horário pendente hoje"
           }
-          href={`/agenda?date=${today}`}
+          href={`/painel/agenda?date=${today}`}
         />
         <Metric
           icon={Clock4}
           label="Horários livres"
           value={String(operations.freeSlots)}
           hint={`Encaixes de ${FREE_SLOT_DURATION_MIN} min até o fim do dia`}
-          href={`/agenda?date=${today}`}
+          href={`/painel/agenda?date=${today}`}
         />
         <Metric
           icon={CircleDollarSign}
           label="Recebido hoje"
           value={formatCurrency(operations.revenueReceived)}
           hint="Pagamentos registrados"
-          href="/financeiro"
+          href="/painel/financeiro"
         />
         <Metric
           icon={Wallet}
           label="A receber hoje"
           value={formatCurrency(toReceive)}
           hint={`${upcoming.length} ${upcoming.length === 1 ? "atendimento previsto" : "atendimentos previstos"}`}
-          href="/agendamentos"
+          href="/painel/agendamentos"
         />
         <Metric
           icon={Ban}
@@ -123,7 +123,7 @@ export function TodayPanel({
           value={String(lost.length)}
           hint={lost.length ? `${formatCurrency(lostValue)} deixados de faturar` : "Nenhuma perda hoje"}
           tone={lost.length ? "warning" : "default"}
-          href="/agendamentos?status=cancelled"
+          href="/painel/agendamentos?status=cancelled"
         />
       </div>
     </section>
