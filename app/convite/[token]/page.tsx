@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { and, eq, gt, isNull } from "drizzle-orm"
 import type { Metadata } from "next"
 import Link from "next/link"
+import { Suspense } from "react"
 
 import { AcceptInviteButton } from "@/components/auth/accept-invite-button"
 import { AuthShell, FormAlert } from "@/components/auth/auth-shell"
@@ -14,7 +15,21 @@ import { ROLE_LABELS } from "@/lib/permissions"
 
 export const metadata: Metadata = { title: "Convite para a equipe", robots: { index: false } }
 
-export default async function InvitePage({ params }: PageProps<"/convite/[token]">) {
+export default function InvitePage({ params }: PageProps<"/convite/[token]">) {
+  return (
+    <Suspense
+      fallback={
+        <AuthShell title="Carregando convite" description="Verificando os dados do convite...">
+          <div className="h-11 w-full animate-pulse rounded-md bg-muted" />
+        </AuthShell>
+      }
+    >
+      <InviteContent params={params} />
+    </Suspense>
+  )
+}
+
+async function InviteContent({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
   const valid = token.length >= 20 && token.length <= 100
   const [invite] = valid

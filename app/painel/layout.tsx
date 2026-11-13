@@ -6,7 +6,15 @@ import { WorkspaceProvider } from "@/components/layout/workspace-context"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { listMemberships, requireAccess } from "@/lib/business"
 
-export default async function DashboardLayout({ children }: LayoutProps<"/painel">) {
+export default function DashboardLayout({ children }: LayoutProps<"/painel">) {
+  return (
+    <Suspense fallback={<div aria-hidden className="min-h-svh bg-background" />}>
+      <DashboardShell>{children}</DashboardShell>
+    </Suspense>
+  )
+}
+
+async function DashboardShell({ children }: { children: React.ReactNode }) {
   const access = await requireAccess()
   const memberships = await listMemberships(access.user.id)
   const workspace = {
