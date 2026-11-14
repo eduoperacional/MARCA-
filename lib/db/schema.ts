@@ -210,3 +210,157 @@ export type PaymentRow = typeof payments.$inferSelect
 export type ExpenseRow = typeof expenses.$inferSelect
 export type TimeBlockRow = typeof timeBlocks.$inferSelect
 export type NotificationRow = typeof notifications.$inferSelect
+
+/* ---------- Plataforma (super admin) ---------- */
+
+export type PlanLimits = Partial<Record<"professionals" | "services" | "members", number>>
+export type BillingInterval = "month" | "year"
+export type SubscriptionStatus =
+  | "trialing"
+  | "active"
+  | "awaiting_payment"
+  | "payment_pending"
+  | "past_due"
+  | "canceled"
+  | "expired"
+  | "suspended"
+export type TransactionStatus = "approved" | "pending" | "declined" | "charged_back" | "refunded"
+export type AdminRole = "super_admin" | "admin" | "finance" | "support"
+
+/** Sessões do Better Auth (somente leitura: último acesso). */
+export const sessions = pgTable("session", {
+  id: text("id").primaryKey(),
+  userId: text("userId").notNull(),
+  expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull(),
+})
+
+export const platformAdmins = pgTable("platform_admins", {
+  userId: text("user_id").primaryKey(),
+  role: text("role").$type<AdminRole>().notNull(),
+  active: boolean("active").notNull().default(true),
+  createdBy: text("created_by"),
+  createdAt: createdAt(),
+})
+
+export const plans = pgTable("plans", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  description: text("description"),
+  priceCents: integer("price_cents").notNull(),
+  billingInterval: text("billing_interval").$type<BillingInterval>().notNull(),
+  trialDays: integer("trial_days").notNull().default(0),
+  features: jsonb("features").$type<string[]>().notNull().default([]),
+  limits: jsonb("limits").$type<PlanLimits>().notNull().default({}),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  version: integer("version").notNull().default(1),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const subscriptions = pgTable("subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  planId: uuid("plan_id").notNull(),
+  planVersion: integer("plan_version").notNull().default(1),
+  status: text("status").$type<SubscriptionStatus>().notNull(),
+  priceCents: integer("price_cents").notNull(),
+  billingInterval: text("billing_interval").$type<BillingInterval>().notNull(),
+  features: jsonb("features").$type<string[]>().notNull().default([]),
+  limits: jsonb("limits").$type<PlanLimits>().notNull().default({}),
+  paymentMethod: text("payment_method"),
+  gateway: text("gateway"),
+  gatewayCustomerId: text("gateway_customer_id"),
+  gatewaySubscriptionId: text("gateway_subscription_id"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
+  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  courtesyUntil: timestamp("courtesy_until", { withTimezone: true }),
+  cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+  cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+  canceledAt: timestamp("canceled_at", { withTimezone: true }),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const subscriptionEvents = pgTable("subscription_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  subscriptionId: uuid("subscription_id").notNull(),
+  businessId: uuid("business_id").notNull(),
+  type: text("type").notNull(),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status"),
+  source: text("source").$type<"admin" | "gateway" | "system">().notNull(),
+  actorUserId: text("actor_user_id"),
+  details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: createdAt(),
+})
+
+export const billingTransactions = pgTable("billing_transactions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  subscriptionId: uuid("subscription_id"),
+  planId: uuid("plan_id"),
+  amountCents: integer("amount_cents").notNull(),
+  refundedCents: integer("refunded_cents").notNull().default(0),
+  currency: text("currency").notNull().default("BRL"),
+  status: text("status").$type<TransactionStatus>().notNull(),
+  paymentMethod: text("payment_method"),
+  gateway: text("gateway").notNull(),
+  gatewayTransactionId: text("gateway_transaction_id").notNull(),
+  description: text("description"),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const billingWebhookEvents = pgTable("billing_webhook_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  gateway: text("gateway").notNull(),
+  eventId: text("event_id").notNull(),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  status: text("status").$type<"received" | "processed" | "failed" | "ignored">().notNull().default("received"),
+  error: text("error"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+})
+
+export const businessSuspensions = pgTable("business_suspensions", {
+  businessId: uuid("business_id").primaryKey(),
+  reason: text("reason").notNull(),
+  suspendedBy: text("suspended_by").notNull(),
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const businessNotes = pgTable("business_notes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  authorUserId: text("author_user_id").notNull(),
+  body: text("body").notNull(),
+  createdAt: createdAt(),
+})
+
+export const adminAuditLog = pgTable("admin_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actorUserId: text("actor_user_id").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  action: text("action").notNull(),
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id"),
+  businessId: uuid("business_id"),
+  reason: text("reason"),
+  details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  createdAt: createdAt(),
+})
+
+export type PlanRow = typeof plans.$inferSelect
+export type SubscriptionRow = typeof subscriptions.$inferSelect
+export type BillingTransactionRow = typeof billingTransactions.$inferSelect

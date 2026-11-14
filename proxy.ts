@@ -8,7 +8,7 @@ export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
   const hasSession = Boolean(getSessionCookie(request))
 
-  if (!hasSession && (pathname.startsWith("/painel") || pathname.startsWith("/onboarding"))) {
+  if (!hasSession && (pathname.startsWith("/painel") || pathname.startsWith("/onboarding") || pathname.startsWith("/admin"))) {
     const url = new URL("/entrar", request.url)
     url.searchParams.set("redirect", `${pathname}${search}`)
     return NextResponse.redirect(url)
@@ -20,5 +20,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/painel/:path*", "/onboarding/:path*", "/entrar", "/cadastro"],
+  matcher: ["/painel/:path*", "/onboarding/:path*", "/admin/:path*", "/admin", "/entrar", "/cadastro"],
 }
