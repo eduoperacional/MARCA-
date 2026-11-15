@@ -170,6 +170,17 @@ export async function cancelSubscriptionLocal(
   return atPeriodEnd ? "period_end" : "now"
 }
 
+/** Desfaz um cancelamento agendado quando o gateway recusa o cancelamento. */
+export async function revertScheduledCancel(db: BillingDb, sub: SubscriptionRow, actor: Actor) {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(subscriptions)
+      .set({ cancelAtPeriodEnd: false, cancelRequestedAt: null, updatedAt: new Date() })
+      .where(and(eq(subscriptions.id, sub.id), eq(subscriptions.cancelAtPeriodEnd, true)))
+    await logEvent(tx, sub, "cancel_reverted", sub.status, actor, { reason: "Gateway recusou o cancelamento" })
+  })
+}
+
 export async function grantCourtesy(db: BillingDb, sub: SubscriptionRow, days: number, actor: Actor, reason: string | null) {
   const base = sub.courtesyUntil && sub.courtesyUntil > new Date() ? sub.courtesyUntil : new Date()
   const courtesyUntil = new Date(base.getTime() + days * 86_400_000)
@@ -229,9 +240,13 @@ export async function addBusinessNote(db: BillingDb, businessId: string, authorU
  * Rotina diária: encerra cancelamentos agendados cujo período acabou e expira trials vencidos
  * há mais de 3 dias sem nenhum pagamento aprovado.
  */
-export async function runBillingMaintenance(db: BillingDb, now = new Date()) {
+export async function runBillingMaintenance(
+  db: BillingDb,
+  now = new Date(),
+  gateway?: { cancelSubscription(id: string): Promise<unknown> }
+) {
   const graceLimit = new Date(now.getTime() - 3 * 86_400_000)
-  return db.transaction(async (tx) => {
+  const ended = await db.transaction(async (tx) => {
     const due = await tx
       .select()
       .from(subscriptions)
@@ -259,6 +274,24 @@ export async function runBillingMaintenance(db: BillingDb, now = new Date()) {
         .where(eq(subscriptions.id, sub.id))
       await logEvent(tx, sub, toStatus === "canceled" ? "canceled" : "trial_expired", toStatus, { userId: null, source: "system" })
     }
-    return due.length
+    return due
   })
+
+  // Trial expirado: interrompe as cobranças no Asaas para não gerar boletos/Pix a quem não contratou.
+  // Cancelamentos agendados já foram encerrados no gateway no momento da solicitação.
+  let gatewayCanceled = 0
+  const gatewayErrors: string[] = []
+  if (gateway) {
+    for (const sub of ended) {
+      if (sub.cancelAtPeriodEnd || !sub.gatewaySubscriptionId) continue
+      try {
+        await gateway.cancelSubscription(sub.gatewaySubscriptionId)
+        gatewayCanceled++
+      } catch (error) {
+        console.error("[billing] falha ao cancelar no Asaas", sub.gatewaySubscriptionId, error)
+        gatewayErrors.push(sub.gatewaySubscriptionId)
+      }
+    }
+  }
+  return { updated: ended.length, gatewayCanceled, gatewayErrors }
 }

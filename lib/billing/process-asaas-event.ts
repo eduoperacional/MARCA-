@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, sql } from "drizzle-orm"
+import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm"
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core"
 
 import * as schema from "@/lib/db/schema"
@@ -159,6 +159,10 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
   const nextStatus = PAYMENT_EVENT_STATUS[event.event]
   if (!nextStatus) return "ignored" as const
 
+  // Cobrança avulsa da conta Asaas, sem relação com assinaturas da MARCAÍ.
+  if (!payment.subscription && !(payment.externalReference && UUID_RE.test(payment.externalReference))) {
+    return "ignored" as const
+  }
   const sub = await findSubscription(tx, payment.subscription, payment.externalReference)
   if (!sub) throw new Error(`Assinatura não encontrada para a cobrança ${payment.id} (${payment.subscription ?? "sem assinatura"})`)
 
@@ -240,7 +244,24 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
   }
 
   const details = { eventId: event.id, event: event.event, paymentId: payment.id, amountCents }
-  if (CLOSED.includes(sub.status)) return "processed" as const
+  // Trial expirado que foi pago depois (ex.: boleto compensado com atraso): reabre a assinatura,
+  // desde que o estabelecimento não tenha contratado outra nesse meio-tempo.
+  let reopen = false
+  if (sub.status === "expired" && becameApproved) {
+    const [other] = await tx
+      .select({ id: subscriptions.id })
+      .from(subscriptions)
+      .where(
+        and(
+          eq(subscriptions.businessId, sub.businessId),
+          ne(subscriptions.id, sub.id),
+          notInArray(subscriptions.status, ["canceled", "expired"])
+        )
+      )
+      .limit(1)
+    reopen = !other
+  }
+  if (CLOSED.includes(sub.status) && !reopen) return "processed" as const
 
   if (becameApproved) {
     const [previous] = await tx
@@ -264,8 +285,9 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
         paymentMethod: paymentMethod ?? sub.paymentMethod,
         currentPeriodStart: keepLaterPeriod ? sub.currentPeriodStart : periodStart,
         currentPeriodEnd: keepLaterPeriod ? sub.currentPeriodEnd : periodEnd,
+        ...(reopen ? { endedAt: null } : {}),
       },
-      { type: previous.count > 0 ? "renewed" : "activated", details }
+      { type: reopen ? "reactivated" : previous.count > 0 ? "renewed" : "activated", details }
     )
     return "processed" as const
   }

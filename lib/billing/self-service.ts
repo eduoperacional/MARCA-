@@ -13,6 +13,7 @@ import {
   getCurrentSubscription,
   getGatewayCustomerId,
   hasHadSubscription,
+  revertScheduledCancel,
   type Actor,
 } from "@/lib/billing/subscriptions"
 
@@ -247,7 +248,20 @@ export async function cancelOwnSubscription(
   actor: Actor,
   reason: string | null
 ) {
-  // Interrompe novas cobranças no Asaas antes de alterar o registro local.
+  const paidFuture = Boolean(sub.currentPeriodEnd && sub.currentPeriodEnd > new Date())
+  if (mode === "period_end" && paidFuture && sub.gatewaySubscriptionId) {
+    // Agenda localmente ANTES de cancelar no Asaas: o webhook SUBSCRIPTION_DELETED pode chegar
+    // antes desta função terminar e, sem a marcação, encerraria o acesso já pago na hora.
+    const result = await cancelSubscriptionLocal(db, sub, mode, actor, reason)
+    try {
+      await gateway.cancelSubscription(sub.gatewaySubscriptionId)
+    } catch (error) {
+      await revertScheduledCancel(db, sub, actor)
+      throw error
+    }
+    return result
+  }
+  // Cancelamento imediato: interrompe as cobranças no Asaas antes de alterar o registro local.
   if (sub.gatewaySubscriptionId) await gateway.cancelSubscription(sub.gatewaySubscriptionId)
   return cancelSubscriptionLocal(db, sub, mode, actor, reason)
 }
