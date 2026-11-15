@@ -3,7 +3,9 @@ import { notFound } from "next/navigation"
 import { CalendarOff, MapPin, Phone } from "lucide-react"
 
 import { BookingFlow } from "@/components/booking/booking-flow"
+import { isPublicBookingBlocked } from "@/lib/booking-guard"
 import { getBusinessBySlug } from "@/lib/business"
+import { db } from "@/lib/db"
 import { listProfessionals, listServices } from "@/lib/queries/catalog"
 import { todayLocal } from "@/lib/time"
 
@@ -22,7 +24,11 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
   const business = await getBusinessBySlug(slug)
   if (!business) notFound()
 
-  const [services, professionals] = await Promise.all([listServices(business.id), listProfessionals(business.id)])
+  const [services, professionals, blocked] = await Promise.all([
+    listServices(business.id),
+    listProfessionals(business.id),
+    isPublicBookingBlocked(db, business),
+  ])
   const activeProfessionals = professionals.filter((p) => p.active)
   const activeIds = new Set(activeProfessionals.map((p) => p.id))
   const bookable = services
@@ -53,7 +59,7 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
         </div>
       </header>
       <main className="mx-auto max-w-2xl px-4 py-6">
-        {!business.onlineBookingEnabled || bookable.length === 0 ? (
+        {blocked || !business.onlineBookingEnabled || bookable.length === 0 ? (
           <div className="flex flex-col items-center gap-3 rounded-xl border p-10 text-center">
             <CalendarOff className="size-8 text-muted-foreground" aria-hidden="true" />
             <h2 className="font-heading text-lg font-semibold">Agendamento online indisponível</h2>

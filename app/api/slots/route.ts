@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm"
 
 import { isUuid } from "@/lib/actions/result"
 import { getAvailableSlots } from "@/lib/availability"
+import { isPublicBookingBlocked } from "@/lib/booking-guard"
 import { getBusinessBySlug, getCurrentBusiness } from "@/lib/business"
 import { db } from "@/lib/db"
 import { services } from "@/lib/db/schema"
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest) {
   }
 
   const business = slug ? await getBusinessBySlug(slug) : await getCurrentBusiness()
-  if (!business || (slug && !business.onlineBookingEnabled)) {
+  if (!business || (slug && (!business.onlineBookingEnabled || (await isPublicBookingBlocked(db, business))))) {
     return NextResponse.json({ error: "Estabelecimento indisponível." }, { status: 404 })
   }
 

@@ -1,12 +1,13 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 
 import { cleanText, fail, isTime, isUuid, toCents } from "@/lib/actions/result"
 import { authorize, NO_PERMISSION } from "@/lib/business"
+import { persistProfessional, persistService } from "@/lib/catalog-links"
 import { db } from "@/lib/db"
-import { appointments, clients, professionalServices, professionals, services } from "@/lib/db/schema"
+import { appointments, clients, professionals, services } from "@/lib/db/schema"
 import { isValidPhone, normalizePhone } from "@/lib/phone"
 import { timeToMinutes } from "@/lib/time"
 import type { DaySchedule } from "@/lib/types"
@@ -126,14 +127,6 @@ export async function saveProfessional(input: ProfessionalInput) {
   const scheduleError = validateSchedule(input.workSchedule)
   if (scheduleError) return fail(scheduleError)
 
-  const serviceIds = input.serviceIds.filter(isUuid)
-  const owned = serviceIds.length
-    ? await db
-        .select({ id: services.id })
-        .from(services)
-        .where(and(eq(services.businessId, business.id), inArray(services.id, serviceIds)))
-    : []
-
   const values = {
     name,
     photoUrl,
@@ -145,20 +138,12 @@ export async function saveProfessional(input: ProfessionalInput) {
     active: input.active,
   }
 
-  await db.transaction(async (tx) => {
-    let id = input.id
-    if (id) {
-      if (!isUuid(id)) throw new Error("Profissional inválido.")
-      await tx.update(professionals).set(values).where(and(eq(professionals.id, id), eq(professionals.businessId, business.id)))
-      await tx.delete(professionalServices).where(eq(professionalServices.professionalId, id))
-    } else {
-      const [created] = await tx.insert(professionals).values({ ...values, businessId: business.id }).returning({ id: professionals.id })
-      id = created.id
-    }
-    if (owned.length) {
-      await tx.insert(professionalServices).values(owned.map((s) => ({ professionalId: id!, serviceId: s.id })))
-    }
+  const result = await persistProfessional(db, business.id, {
+    id: input.id || undefined,
+    values,
+    serviceIds: Array.isArray(input.serviceIds) ? input.serviceIds : [],
   })
+  if (!result.ok) return fail(result.error)
   return done()
 }
 
@@ -197,14 +182,6 @@ export async function saveService(input: ServiceInput) {
     return fail("A duração deve estar entre 5 e 600 minutos, em múltiplos de 5.")
   }
 
-  const professionalIds = input.professionalIds.filter(isUuid)
-  const owned = professionalIds.length
-    ? await db
-        .select({ id: professionals.id })
-        .from(professionals)
-        .where(and(eq(professionals.businessId, business.id), inArray(professionals.id, professionalIds)))
-    : []
-
   const values = {
     name,
     category: cleanText(input.category, 60) ?? "Geral",
@@ -214,20 +191,12 @@ export async function saveService(input: ServiceInput) {
     active: input.active,
   }
 
-  await db.transaction(async (tx) => {
-    let id = input.id
-    if (id) {
-      if (!isUuid(id)) throw new Error("Serviço inválido.")
-      await tx.update(services).set(values).where(and(eq(services.id, id), eq(services.businessId, business.id)))
-      await tx.delete(professionalServices).where(eq(professionalServices.serviceId, id))
-    } else {
-      const [created] = await tx.insert(services).values({ ...values, businessId: business.id }).returning({ id: services.id })
-      id = created.id
-    }
-    if (owned.length) {
-      await tx.insert(professionalServices).values(owned.map((p) => ({ professionalId: p.id, serviceId: id! })))
-    }
+  const result = await persistService(db, business.id, {
+    id: input.id || undefined,
+    values,
+    professionalIds: Array.isArray(input.professionalIds) ? input.professionalIds : [],
   })
+  if (!result.ok) return fail(result.error)
   return done()
 }
 
