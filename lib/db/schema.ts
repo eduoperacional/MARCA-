@@ -286,9 +286,16 @@ export const subscriptions = pgTable("subscriptions", {
   cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
   canceledAt: timestamp("canceled_at", { withTimezone: true }),
   endedAt: timestamp("ended_at", { withTimezone: true }),
+  gatewayCancelStatus: text("gateway_cancel_status").$type<GatewayCancelStatus>(),
+  gatewayCancelAttempts: integer("gateway_cancel_attempts").notNull().default(0),
+  gatewayCancelLastError: text("gateway_cancel_last_error"),
+  gatewayCancelLastAttemptAt: timestamp("gateway_cancel_last_attempt_at", { withTimezone: true }),
+  gatewayCanceledAt: timestamp("gateway_canceled_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 })
+
+export type GatewayCancelStatus = "pending" | "done" | "failed"
 
 export const subscriptionEvents = pgTable("subscription_events", {
   id: uuid("id").primaryKey().defaultRandom(),

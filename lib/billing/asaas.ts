@@ -7,7 +7,14 @@ import "server-only"
 const BASE_URL =
   process.env.ASAAS_ENV === "production" ? "https://api.asaas.com/v3" : "https://api-sandbox.asaas.com/v3"
 
-export class AsaasError extends Error {}
+export class AsaasError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message)
+  }
+}
 
 export function isAsaasConfigured() {
   return Boolean(process.env.ASAAS_API_KEY)
@@ -32,7 +39,7 @@ async function request<T>(path: string, init: { method?: string; body?: unknown 
   if (!response.ok) {
     const message = data.errors?.[0]?.description ?? `Asaas respondeu ${response.status}`
     console.error("[asaas]", init.method ?? "GET", path, response.status, message)
-    throw new AsaasError(message)
+    throw new AsaasError(message, response.status)
   }
   return data as T
 }
