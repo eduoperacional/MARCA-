@@ -38,6 +38,9 @@ const MRR_EXPR = sql`CASE WHEN s.billing_interval = 'year' THEN s.price_cents / 
 const PAYING = sql`s.status = 'active' AND (s.courtesy_until IS NULL OR s.courtesy_until < now())`
 /** Valor efetivamente recebido: aprovado ou reembolsado parcialmente, menos o reembolso. */
 const RECEIVED_EXPR = sql`CASE WHEN t.status IN ('approved', 'refunded') THEN t.amount_cents - t.refunded_cents ELSE 0 END`
+/** Planos de teste interno (plans.is_test) não contam como receita comercial nem MRR. */
+const COMMERCIAL_SUB = sql`NOT EXISTS (SELECT 1 FROM plans tp WHERE tp.id = s.plan_id AND tp.is_test)`
+const COMMERCIAL_TX = sql`NOT EXISTS (SELECT 1 FROM plans tp WHERE tp.id = t.plan_id AND tp.is_test)`
 
 export async function getOverview(start: Date, end: Date) {
   const [base] = await rows<{
@@ -64,8 +67,8 @@ export async function getOverview(start: Date, end: Date) {
       count(*) FILTER (WHERE s.status = 'trialing')::int AS trialing,
       count(*) FILTER (WHERE s.status = 'canceled')::int AS canceled,
       count(*) FILTER (WHERE s.status IN ('past_due', 'payment_pending', 'awaiting_payment', 'expired'))::int AS delinquent,
-      count(*) FILTER (WHERE ${PAYING})::int AS paying,
-      coalesce(sum(${MRR_EXPR}) FILTER (WHERE ${PAYING}), 0)::float8 AS mrr_cents
+      count(*) FILTER (WHERE ${PAYING} AND ${COMMERCIAL_SUB})::int AS paying,
+      coalesce(sum(${MRR_EXPR}) FILTER (WHERE ${PAYING} AND ${COMMERCIAL_SUB}), 0)::float8 AS mrr_cents
     FROM subscriptions s
     WHERE s.id IN (
       SELECT DISTINCT ON (business_id) id FROM subscriptions ORDER BY business_id, created_at DESC
@@ -77,6 +80,7 @@ export async function getOverview(start: Date, end: Date) {
       coalesce(sum(${RECEIVED_EXPR}) FILTER (WHERE t.paid_at BETWEEN ${start} AND ${end}), 0)::float8 AS received_cents,
       coalesce(sum(t.amount_cents) FILTER (WHERE t.status = 'pending'), 0)::float8 AS pending_cents
     FROM billing_transactions t
+    WHERE ${COMMERCIAL_TX}
   `)
 
   const mrr = subs.mrr_cents / 100
@@ -127,7 +131,7 @@ export async function getMonthlySeries(months = 12): Promise<MonthlyPoint[]> {
       (SELECT count(*)::int FROM businesses b WHERE b.created_at < m + interval '1 month') AS total_businesses,
       (SELECT count(*)::int FROM subscriptions s WHERE date_trunc('month', s.created_at) = m) AS new_subscriptions,
       (SELECT count(*)::int FROM subscriptions s WHERE date_trunc('month', s.canceled_at) = m) AS cancellations,
-      (SELECT coalesce(sum(${RECEIVED_EXPR}), 0)::float8 FROM billing_transactions t WHERE date_trunc('month', t.paid_at) = m) AS revenue_cents
+      (SELECT coalesce(sum(${RECEIVED_EXPR}), 0)::float8 FROM billing_transactions t WHERE date_trunc('month', t.paid_at) = m AND ${COMMERCIAL_TX}) AS revenue_cents
     FROM months
     ORDER BY m
   `)
@@ -152,6 +156,7 @@ export async function getPlanBreakdown(start: Date, end: Date): Promise<PlanSlic
       (SELECT coalesce(sum(${RECEIVED_EXPR}), 0)::float8 FROM billing_transactions t
         WHERE t.plan_id = p.id AND t.paid_at BETWEEN ${start} AND ${end}) AS received_cents
     FROM plans p
+    WHERE NOT p.is_test
     ORDER BY p.sort_order, p.name
   `)
   return data.map((row) => ({

@@ -259,6 +259,8 @@ export const plans = pgTable("plans", {
   version: integer("version").notNull().default(1),
   isRecommended: boolean("is_recommended").notNull().default(false),
   family: text("family"),
+  isHidden: boolean("is_hidden").notNull().default(false),
+  isTest: boolean("is_test").notNull().default(false),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 })

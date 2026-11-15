@@ -4,10 +4,15 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core"
 import * as schema from "@/lib/db/schema"
 import type { SubscriptionRow, SubscriptionStatus, TransactionStatus } from "@/lib/db/schema"
 
-const { billingTransactions, billingWebhookEvents, subscriptionEvents, subscriptions } = schema
+const { billingTransactions, billingWebhookEvents, plans, subscriptionEvents, subscriptions } = schema
 
 export type BillingDb = PgDatabase<PgQueryResultHKT, typeof schema>
 type Tx = Parameters<Parameters<BillingDb["transaction"]>[0]>[0]
+
+async function isTestPlan(tx: Tx, planId: string) {
+  const [plan] = await tx.select({ isTest: plans.isTest }).from(plans).where(eq(plans.id, planId)).limit(1)
+  return Boolean(plan?.isTest)
+}
 
 export const ASAAS = "asaas"
 
@@ -277,6 +282,9 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
     const periodStart = parseAsaasDate(payment.dueDate) ?? paidAt ?? new Date()
     const periodEnd = addInterval(periodStart, sub.billingInterval)
     const keepLaterPeriod = sub.currentPeriodEnd && sub.currentPeriodEnd > periodEnd
+    // Plano de teste (maxPayments: 1): a cobrança única cobre um período e o acesso termina
+    // no fim dele pela rotina diária, independentemente de eventos de encerramento do Asaas.
+    const singleCharge = await isTestPlan(tx, sub.planId)
     await setSubscriptionStatus(
       tx,
       sub,
@@ -288,6 +296,7 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
         // Reativada: o cancelamento no Asaas que ainda não aconteceu deixa de ser devido.
         ...(reopen ? { endedAt: null } : {}),
         ...(reopen && sub.gatewayCancelStatus !== "done" ? { gatewayCancelStatus: null } : {}),
+        ...(singleCharge ? { cancelAtPeriodEnd: true, cancelRequestedAt: sub.cancelRequestedAt ?? new Date() } : {}),
       },
       {
         type: reopen ? "reactivated" : previous.count > 0 ? "renewed" : "activated",
@@ -334,6 +343,12 @@ async function handleSubscription(tx: Tx, event: AsaasEvent) {
   // Cancelamento agendado: o cliente usa até o fim do período pago; o cron encerra depois.
   if (sub.cancelAtPeriodEnd && sub.currentPeriodEnd && sub.currentPeriodEnd > now) {
     await setSubscriptionStatus(tx, sub, { canceledAt: sub.canceledAt ?? now }, { type: "gateway_canceled", details })
+    return "processed" as const
+  }
+  // Com maxPayments: 1 o Asaas pode inativar a assinatura logo após gerar a cobrança única,
+  // antes do pagamento. Não encerra: a cobrança continua pagável e o acesso segue as regras locais.
+  if (event.event === "SUBSCRIPTION_INACTIVATED" && (await isTestPlan(tx, sub.planId))) {
+    await setSubscriptionStatus(tx, sub, {}, { type: "gateway_inactivated", details })
     return "processed" as const
   }
   await setSubscriptionStatus(

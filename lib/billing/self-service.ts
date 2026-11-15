@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, isNotNull } from "drizzle-orm"
 
 import * as schema from "@/lib/db/schema"
 import type { PlanRow, SubscriptionRow } from "@/lib/db/schema"
@@ -16,8 +16,9 @@ import {
   revertScheduledCancel,
   type Actor,
 } from "@/lib/billing/subscriptions"
+import { canRepeatTestPlan, isPlanAvailableTo } from "@/lib/billing/test-plan"
 
-const { billingTransactions, plans } = schema
+const { billingTransactions, plans, subscriptions } = schema
 
 const DAY = 86_400_000
 
@@ -42,6 +43,7 @@ export type CheckoutGateway = {
     description: string
     externalReference: string
     billingType?: BillingType
+    maxPayments?: number
   }): Promise<{ id: string }>
   updateSubscription(
     id: string,
@@ -90,13 +92,27 @@ function isValidCnpj(d: string) {
   return calc(12) === Number(d[12]) && calc(13) === Number(d[13])
 }
 
-export async function listPublicPlans(db: BillingDb) {
-  return db.select().from(plans).where(eq(plans.isActive, true)).orderBy(asc(plans.sortOrder), asc(plans.priceCents))
+/** Planos do autoatendimento. Ocultos e de teste só aparecem para os e-mails liberados. */
+export async function listPublicPlans(db: BillingDb, viewerEmail: string | null = null) {
+  const rows = await db.select().from(plans).where(eq(plans.isActive, true)).orderBy(asc(plans.sortOrder), asc(plans.priceCents))
+  return rows.filter((plan) => isPlanAvailableTo(plan, viewerEmail))
 }
 
-export async function getActivePlan(db: BillingDb, planId: string) {
+/** Plano ativo e disponível para quem está contratando; a mesma regra da listagem vale no servidor. */
+export async function getActivePlan(db: BillingDb, planId: string, viewerEmail: string | null = null) {
   const [plan] = await db.select().from(plans).where(and(eq(plans.id, planId), eq(plans.isActive, true))).limit(1)
-  return plan ?? null
+  return plan && isPlanAvailableTo(plan, viewerEmail) ? plan : null
+}
+
+/** O estabelecimento já criou alguma assinatura de plano de teste no Asaas (em qualquer status). */
+export async function hasUsedTestPlan(db: BillingDb, businessId: string) {
+  const [row] = await db
+    .select({ id: subscriptions.id })
+    .from(subscriptions)
+    .innerJoin(plans, eq(plans.id, subscriptions.planId))
+    .where(and(eq(subscriptions.businessId, businessId), eq(plans.isTest, true), isNotNull(subscriptions.gatewaySubscriptionId)))
+    .limit(1)
+  return Boolean(row)
 }
 
 /**
@@ -148,12 +164,15 @@ export async function startCheckout(
   }
 ) {
   const now = input.now ?? new Date()
-  const plan = await getActivePlan(db, input.planId)
+  const plan = await getActivePlan(db, input.planId, input.user.email)
   if (!plan) throw new BillingRuleError("Plano indisponível.")
 
   const current = await getCurrentSubscription(db, input.business.id)
   if (current?.gatewaySubscriptionId) {
     throw new BillingRuleError("Você já possui uma assinatura em andamento. Use a opção de mudar de plano.")
+  }
+  if (plan.isTest && !canRepeatTestPlan(input.user.email) && (await hasUsedTestPlan(db, input.business.id))) {
+    throw new BillingRuleError("O plano de teste já foi utilizado por este estabelecimento.")
   }
 
   let customerId =
@@ -176,8 +195,9 @@ export async function startCheckout(
   }
 
   // Trial é do estabelecimento (desde o cadastro), não do plano: contratar não reinicia o teste.
+  // O plano de teste interno sempre cobra no mesmo dia.
   const trialEnd = new Date(input.business.createdAt.getTime() + DEFAULT_TRIAL_DAYS * DAY)
-  const inTrial = !(await hasHadSubscription(db, input.business.id)) && trialEnd > now
+  const inTrial = !plan.isTest && !(await hasHadSubscription(db, input.business.id)) && trialEnd > now
   const trialDays = inTrial ? Math.max(1, Math.ceil((trialEnd.getTime() - now.getTime()) / DAY)) : 0
 
   let sub: SubscriptionRow
@@ -205,6 +225,7 @@ export async function startCheckout(
       description: planDescription(plan),
       externalReference: sub.id,
       billingType: input.billingType,
+      ...(plan.isTest ? { maxPayments: 1 } : {}),
     })
   } catch (error) {
     await discardLocalSubscription(db, sub.id)
@@ -227,7 +248,8 @@ export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub
     throw new BillingRuleError("Regularize a cobrança em aberto antes de mudar de plano.")
   }
   if (sub.cancelAtPeriodEnd) throw new BillingRuleError("A assinatura tem cancelamento agendado.")
-  const plan = await getActivePlan(db, planId)
+  // Sem e-mail: planos ocultos e de teste nunca são destino de troca, nem para e-mails liberados.
+  const plan = await getActivePlan(db, planId, null)
   if (!plan) throw new BillingRuleError("Plano indisponível.")
   if (plan.id === sub.planId) throw new BillingRuleError("Este já é o seu plano atual.")
 
