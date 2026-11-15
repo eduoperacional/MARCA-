@@ -4,7 +4,7 @@
 
 DO $$
 DECLARE
-  v_email text := 'SEU_EMAIL_AQUI@exemplo.com';
+  v_email text := 'cascadebala1900@gmail.com';
   v_user  text;
 BEGIN
   IF to_regclass('public.platform_admins') IS NULL THEN

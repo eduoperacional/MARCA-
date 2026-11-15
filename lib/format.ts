@@ -57,3 +57,24 @@ export function percentChange(current: number, previous: number) {
   if (previous === 0) return current === 0 ? 0 : 1
   return (current - previous) / previous
 }
+
+const dateFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "America/Sao_Paulo" })
+const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", {
+  dateStyle: "short",
+  timeStyle: "short",
+  timeZone: "America/Sao_Paulo",
+})
+
+export function formatDate(value: Date | string | null | undefined) {
+  if (!value) return "—"
+  return dateFormatter.format(new Date(value))
+}
+
+export function formatDateTime(value: Date | string | null | undefined) {
+  if (!value) return "—"
+  return dateTimeFormatter.format(new Date(value))
+}
+
+export function formatCents(cents: number | null | undefined) {
+  return formatCurrency((cents ?? 0) / 100, true)
+}

@@ -195,7 +195,7 @@ ON CONFLICT (code) DO NOTHING;
 -- 9. Libera o seu acesso de super admin ----------------------------------------
 DO $$
 DECLARE
-  v_email text := 'SEU_EMAIL_AQUI@exemplo.com';
+  v_email text := 'cascadebala1900@gmail.com';
   v_user  text;
 BEGIN
   SELECT id INTO v_user FROM "user" WHERE lower(email) = lower(v_email);

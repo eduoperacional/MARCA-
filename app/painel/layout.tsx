@@ -4,7 +4,9 @@ import { AppHeader } from "@/components/layout/app-header"
 import { AppSidebar } from "@/components/layout/app-sidebar"
 import { WorkspaceProvider } from "@/components/layout/workspace-context"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { getSuspension } from "@/lib/billing/subscriptions"
 import { listMemberships, requireAccess } from "@/lib/business"
+import { db } from "@/lib/db"
 
 export default function DashboardLayout({ children }: LayoutProps<"/painel">) {
   return (
@@ -25,6 +27,21 @@ async function DashboardShell({ children }: { children: React.ReactNode }) {
     memberships: memberships
       .filter((m) => m.business.onboardingCompletedAt || m.member.role !== "owner")
       .map((m) => ({ id: m.business.id, name: m.business.displayName || m.business.name, role: m.member.role })),
+  }
+
+  const suspension = await getSuspension(db, access.business.id).catch(() => null)
+  if (suspension) {
+    return (
+      <main className="flex min-h-svh items-center justify-center bg-background px-4">
+        <div className="flex max-w-md flex-col gap-3 rounded-xl border bg-card p-6 text-center">
+          <h1 className="text-xl font-semibold text-balance text-foreground">Acesso temporariamente bloqueado</h1>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            O painel de {workspace.business.name} foi bloqueado pela equipe da MARCAÍ. Entre em contato com o suporte para
+            regularizar o acesso.
+          </p>
+        </div>
+      </main>
+    )
   }
 
   return (
