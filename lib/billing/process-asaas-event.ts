@@ -285,9 +285,14 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
         paymentMethod: paymentMethod ?? sub.paymentMethod,
         currentPeriodStart: keepLaterPeriod ? sub.currentPeriodStart : periodStart,
         currentPeriodEnd: keepLaterPeriod ? sub.currentPeriodEnd : periodEnd,
+        // Reativada: o cancelamento no Asaas que ainda não aconteceu deixa de ser devido.
         ...(reopen ? { endedAt: null } : {}),
+        ...(reopen && sub.gatewayCancelStatus !== "done" ? { gatewayCancelStatus: null } : {}),
       },
-      { type: reopen ? "reactivated" : previous.count > 0 ? "renewed" : "activated", details }
+      {
+        type: reopen ? "reactivated" : previous.count > 0 ? "renewed" : "activated",
+        details: reopen ? { ...details, gatewayCancelStatus: sub.gatewayCancelStatus } : details,
+      }
     )
     return "processed" as const
   }

@@ -7,6 +7,13 @@ export async function GET(request: Request) {
   if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
     return Response.json({ error: "unauthorized" }, { status: 401 })
   }
-  const result = await runBillingMaintenance(db, new Date(), asaas.isAsaasConfigured() ? asaas : undefined)
+  const configured = asaas.isAsaasConfigured()
+  const result = await runBillingMaintenance(db, new Date(), configured ? asaas : undefined)
+  const { concluded, failedAttempts, pending, failed } = result.gatewayCancel
+  console.info(
+    `[billing-cron] assinaturas encerradas: ${result.updated} | cancelamentos no Asaas: concluídos ${concluded}, ` +
+      `falhas nesta execução ${failedAttempts}, pendentes ${pending}, falhas definitivas ${failed}` +
+      (configured ? "" : " | ASAAS_API_KEY ausente: fila não processada")
+  )
   return Response.json(result)
 }

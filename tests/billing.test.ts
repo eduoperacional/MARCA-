@@ -10,7 +10,7 @@ import { drizzle } from "drizzle-orm/pglite"
 import { computeBillingAccess } from "@/lib/billing/access"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
 import { cancelOwnSubscription, startCheckout, type CheckoutGateway } from "@/lib/billing/self-service"
-import { runBillingMaintenance } from "@/lib/billing/subscriptions"
+import { GATEWAY_CANCEL_MAX_ATTEMPTS, runBillingMaintenance } from "@/lib/billing/subscriptions"
 import { handleAsaasWebhook } from "@/lib/billing/webhook"
 import * as schema from "@/lib/db/schema"
 
@@ -167,14 +167,19 @@ async function checkout(createdAt = new Date()) {
 }
 
 describe("migrations", () => {
-  test("002 a 008 executam em sequência e criam 6 planos", async () => {
+  test("002 a 010 executam em sequência e criam 6 planos", async () => {
     const rows = await db.select().from(schema.plans)
     assert.equal(rows.length, 6)
   })
 
   test("são idempotentes (execução repetida não falha)", async () => {
     const dir = path.join(process.cwd(), "scripts")
-    for (const file of ["006-super-admin.sql", "008-checkout-assinaturas.sql"]) {
+    for (const file of [
+      "006-super-admin.sql",
+      "008-checkout-assinaturas.sql",
+      "009-fila-cancelamento-gateway.sql",
+      "010-enfileirar-trials-expirados.sql",
+    ]) {
       await pg.exec(fs.readFileSync(path.join(dir, file), "utf8"))
     }
     assert.equal((await db.select().from(schema.plans)).length, 6)
@@ -408,6 +413,194 @@ describe("cron de cobrança", () => {
       .where(eq(schema.subscriptions.id, sub.id))
     await runBillingMaintenance(db, new Date())
     assert.equal((await getSub(sub.id)).status, "canceled")
+  })
+})
+
+describe("cron: fila de cancelamentos no Asaas", () => {
+  const MIN = 60_000
+
+  async function expiredTrial() {
+    const { result } = await checkout(new Date(Date.now() - 10 * DAY))
+    const sub = result.subscription
+    await db.update(schema.subscriptions).set({ trialEndsAt: new Date(Date.now() - 5 * DAY) }).where(eq(schema.subscriptions.id, sub.id))
+    return sub
+  }
+
+  function cancelGateway(behavior: (id: string) => Promise<void> = async () => {}) {
+    const calls: string[] = []
+    return {
+      calls,
+      gateway: {
+        async cancelSubscription(id: string) {
+          calls.push(id)
+          await behavior(id)
+        },
+      },
+    }
+  }
+
+  async function events(subId: string, type: string) {
+    const rows = await db.select().from(schema.subscriptionEvents).where(eq(schema.subscriptionEvents.subscriptionId, subId))
+    return rows.filter((r) => r.type === type)
+  }
+
+  test("falha de comunicação fica pendente, registra tentativa e erro, e é concluída na execução seguinte", async () => {
+    const sub = await expiredTrial()
+    const t0 = new Date()
+    const failing = cancelGateway(async () => {
+      throw new Error("fetch failed: ECONNRESET")
+    })
+    const first = await runBillingMaintenance(db, t0, failing.gateway)
+    let row = await getSub(sub.id)
+    assert.equal(row.status, "expired")
+    assert.equal(row.gatewayCancelStatus, "pending")
+    assert.equal(row.gatewayCancelAttempts, 1)
+    assert.match(row.gatewayCancelLastError ?? "", /ECONNRESET/)
+    assert.ok(first.gatewayCancel.failedAttempts >= 1)
+    assert.ok(first.gatewayCancel.pending >= 1)
+    const failures = await events(sub.id, "gateway_cancel_failed")
+    assert.equal(failures.length, 1)
+    assert.equal(failures[0].details.willRetry, true)
+
+    const ok = cancelGateway()
+    const second = await runBillingMaintenance(db, new Date(t0.getTime() + 11 * MIN), ok.gateway)
+    row = await getSub(sub.id)
+    assert.equal(row.gatewayCancelStatus, "done")
+    assert.equal(row.gatewayCancelAttempts, 2)
+    assert.equal(row.gatewayCancelLastError, null)
+    assert.ok(row.gatewayCanceledAt)
+    assert.ok(second.gatewayCancel.concluded >= 1)
+    assert.equal((await events(sub.id, "gateway_canceled")).length, 1)
+
+    const again = cancelGateway()
+    await runBillingMaintenance(db, new Date(t0.getTime() + 30 * MIN), again.gateway)
+    assert.ok(!again.calls.includes(sub.gatewaySubscriptionId!), "cancelamento confirmado não pode ser repetido")
+    assert.equal((await getSub(sub.id)).gatewayCancelAttempts, 2)
+  })
+
+  test("não repete a tentativa dentro da janela de reserva (evita chamada duplicada)", async () => {
+    const sub = await expiredTrial()
+    const t0 = new Date()
+    await runBillingMaintenance(db, t0, cancelGateway(async () => Promise.reject(new Error("timeout"))).gateway)
+    const soon = cancelGateway()
+    await runBillingMaintenance(db, new Date(t0.getTime() + 2 * MIN), soon.gateway)
+    assert.ok(!soon.calls.includes(sub.gatewaySubscriptionId!))
+    assert.equal((await getSub(sub.id)).gatewayCancelAttempts, 1)
+  })
+
+  test("execuções simultâneas do cron cancelam cada assinatura uma única vez", async () => {
+    const sub = await expiredTrial()
+    const slow = cancelGateway(() => new Promise((resolve) => setTimeout(resolve, 30)))
+    const now = new Date()
+    await Promise.all([runBillingMaintenance(db, now, slow.gateway), runBillingMaintenance(db, now, slow.gateway)])
+    assert.equal(slow.calls.filter((id) => id === sub.gatewaySubscriptionId).length, 1)
+    const row = await getSub(sub.id)
+    assert.equal(row.gatewayCancelStatus, "done")
+    assert.equal(row.gatewayCancelAttempts, 1)
+  })
+
+  test("assinatura já removida no Asaas (404) é tratada como concluída", async () => {
+    const sub = await expiredTrial()
+    const gone = cancelGateway(async () => {
+      throw Object.assign(new Error("Assinatura não encontrada"), { status: 404 })
+    })
+    const out = await runBillingMaintenance(db, new Date(), gone.gateway)
+    const row = await getSub(sub.id)
+    assert.equal(row.gatewayCancelStatus, "done")
+    assert.ok(out.gatewayCancel.concluded >= 1)
+    assert.equal((await events(sub.id, "gateway_canceled"))[0].details.alreadyRemoved, true)
+  })
+
+  test("esgota as tentativas, marca como falha definitiva e para de chamar o Asaas", async () => {
+    const sub = await expiredTrial()
+    const failing = cancelGateway(async () => {
+      throw new Error("Asaas respondeu 500")
+    })
+    const t0 = Date.now()
+    let last
+    for (let i = 0; i < GATEWAY_CANCEL_MAX_ATTEMPTS; i++) {
+      last = await runBillingMaintenance(db, new Date(t0 + i * 11 * MIN), failing.gateway)
+    }
+    let row = await getSub(sub.id)
+    assert.equal(row.gatewayCancelStatus, "failed")
+    assert.equal(row.gatewayCancelAttempts, GATEWAY_CANCEL_MAX_ATTEMPTS)
+    assert.ok(last!.gatewayCancel.failed >= 1)
+    const failures = await events(sub.id, "gateway_cancel_failed")
+    assert.equal(failures.length, GATEWAY_CANCEL_MAX_ATTEMPTS)
+    const final = failures.filter((f) => f.details.willRetry === false)
+    assert.equal(final.length, 1)
+    assert.equal(final[0].details.attempt, GATEWAY_CANCEL_MAX_ATTEMPTS)
+
+    const later = cancelGateway()
+    await runBillingMaintenance(db, new Date(t0 + 200 * MIN), later.gateway)
+    assert.ok(!later.calls.includes(sub.gatewaySubscriptionId!))
+    row = await getSub(sub.id)
+    assert.equal(row.gatewayCancelAttempts, GATEWAY_CANCEL_MAX_ATTEMPTS)
+  })
+
+  test("sem Asaas configurado a fila é preservada para a próxima execução", async () => {
+    const sub = await expiredTrial()
+    const out = await runBillingMaintenance(db, new Date())
+    const row = await getSub(sub.id)
+    assert.equal(row.gatewayCancelStatus, "pending")
+    assert.equal(row.gatewayCancelAttempts, 0)
+    assert.ok(out.gatewayCancel.pending >= 1)
+    await runBillingMaintenance(db, new Date(), cancelGateway().gateway)
+    assert.equal((await getSub(sub.id)).gatewayCancelStatus, "done")
+  })
+
+  test("pagamento tardio com cancelamento pendente reativa e retira da fila", async () => {
+    const sub = await expiredTrial()
+    const t0 = new Date()
+    await runBillingMaintenance(db, t0, cancelGateway(async () => Promise.reject(new Error("timeout"))).gateway)
+    assert.equal((await getSub(sub.id)).gatewayCancelStatus, "pending")
+
+    await webhook(paymentEvent("PAYMENT_RECEIVED", sub, `pay_${crypto.randomUUID()}`))
+    const reopened = await getSub(sub.id)
+    assert.equal(reopened.status, "active")
+    assert.equal(reopened.gatewayCancelStatus, null)
+
+    const later = cancelGateway()
+    await runBillingMaintenance(db, new Date(t0.getTime() + 11 * MIN), later.gateway)
+    assert.ok(!later.calls.includes(sub.gatewaySubscriptionId!), "assinatura paga não pode ser cancelada no Asaas")
+  })
+
+  test("pagamento tardio não reativa se já existe outra assinatura contratada; cancelamento segue na fila", async () => {
+    const sub = await expiredTrial()
+    const t0 = new Date()
+    await runBillingMaintenance(db, t0, cancelGateway(async () => Promise.reject(new Error("timeout"))).gateway)
+    await db.insert(schema.subscriptions).values({
+      businessId: sub.businessId,
+      planId: sub.planId,
+      status: "active",
+      priceCents: sub.priceCents,
+      billingInterval: sub.billingInterval,
+    })
+
+    await webhook(paymentEvent("PAYMENT_RECEIVED", sub, `pay_${crypto.randomUUID()}`))
+    const row = await getSub(sub.id)
+    assert.equal(row.status, "expired")
+    assert.equal(row.gatewayCancelStatus, "pending")
+
+    const later = cancelGateway()
+    await runBillingMaintenance(db, new Date(t0.getTime() + 11 * MIN), later.gateway)
+    assert.ok(later.calls.includes(sub.gatewaySubscriptionId!))
+    assert.equal((await getSub(sub.id)).gatewayCancelStatus, "done")
+  })
+
+  test("cancelamento agendado pelo dono não entra na fila (já foi cancelado no Asaas)", async () => {
+    const { result } = await checkout()
+    const sub = result.subscription
+    await db
+      .update(schema.subscriptions)
+      .set({ status: "active", cancelAtPeriodEnd: true, currentPeriodEnd: new Date(Date.now() - DAY) })
+      .where(eq(schema.subscriptions.id, sub.id))
+    const gw = cancelGateway()
+    await runBillingMaintenance(db, new Date(), gw.gateway)
+    const row = await getSub(sub.id)
+    assert.equal(row.status, "canceled")
+    assert.equal(row.gatewayCancelStatus, null)
+    assert.ok(!gw.calls.includes(sub.gatewaySubscriptionId!))
   })
 })
 

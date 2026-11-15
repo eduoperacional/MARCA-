@@ -236,15 +236,123 @@ export async function addBusinessNote(db: BillingDb, businessId: string, authorU
   await db.insert(businessNotes).values({ businessId, authorUserId, body })
 }
 
+export const GATEWAY_CANCEL_MAX_ATTEMPTS = 8
+/** Janela em que uma tentativa em andamento fica reservada, evitando chamadas duplicadas entre execuções simultâneas. */
+const GATEWAY_CANCEL_LEASE_MS = 10 * 60_000
+const GATEWAY_CANCEL_BATCH = 100
+
+type CancelGateway = { cancelSubscription(id: string): Promise<unknown> }
+
+export type GatewayCancelSummary = {
+  /** Cancelamentos confirmados pelo Asaas nesta execução. */
+  concluded: number
+  /** Tentativas que falharam nesta execução (serão repetidas ou foram esgotadas). */
+  failedAttempts: number
+  /** Total aguardando nova tentativa após esta execução. */
+  pending: number
+  /** Total com tentativas esgotadas, aguardando verificação manual. */
+  failed: number
+}
+
+function isGatewayNotFound(error: unknown) {
+  return typeof error === "object" && error !== null && (error as { status?: unknown }).status === 404
+}
+
+function errorMessage(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 500)
+}
+
+const system: Actor = { userId: null, source: "system" }
+
 /**
- * Rotina diária: encerra cancelamentos agendados cujo período acabou e expira trials vencidos
- * há mais de 3 dias sem nenhum pagamento aprovado.
+ * Processa a fila persistente de cancelamentos no Asaas. Cada item é reservado com um UPDATE
+ * condicional antes da chamada, então duas execuções do cron nunca cancelam o mesmo item ao mesmo
+ * tempo, e um cancelamento confirmado ('done') nunca é repetido.
  */
-export async function runBillingMaintenance(
-  db: BillingDb,
-  now = new Date(),
-  gateway?: { cancelSubscription(id: string): Promise<unknown> }
-) {
+export async function processGatewayCancellations(db: BillingDb, now: Date, gateway?: CancelGateway) {
+  let concluded = 0
+  let failedAttempts = 0
+  const leaseLimit = new Date(now.getTime() - GATEWAY_CANCEL_LEASE_MS)
+  const claimable = and(
+    eq(subscriptions.gatewayCancelStatus, "pending"),
+    eq(subscriptions.status, "expired"),
+    isNotNull(subscriptions.gatewaySubscriptionId),
+    or(isNull(subscriptions.gatewayCancelLastAttemptAt), lt(subscriptions.gatewayCancelLastAttemptAt, leaseLimit))
+  )
+
+  if (gateway) {
+    const candidates = await db.select({ id: subscriptions.id }).from(subscriptions).where(claimable).limit(GATEWAY_CANCEL_BATCH)
+
+    for (const { id } of candidates) {
+      const [claimed] = await db
+        .update(subscriptions)
+        .set({
+          gatewayCancelAttempts: sql`${subscriptions.gatewayCancelAttempts} + 1`,
+          gatewayCancelLastAttemptAt: now,
+          updatedAt: now,
+        })
+        .where(and(eq(subscriptions.id, id), claimable))
+        .returning()
+      if (!claimed?.gatewaySubscriptionId) continue
+
+      let failure: unknown = null
+      let alreadyRemoved = false
+      try {
+        await gateway.cancelSubscription(claimed.gatewaySubscriptionId)
+      } catch (error) {
+        if (isGatewayNotFound(error)) alreadyRemoved = true
+        else failure = error
+      }
+
+      if (!failure) {
+        const [done] = await db
+          .update(subscriptions)
+          .set({ gatewayCancelStatus: "done", gatewayCanceledAt: now, gatewayCancelLastError: null, updatedAt: now })
+          .where(and(eq(subscriptions.id, id), eq(subscriptions.gatewayCancelStatus, "pending")))
+          .returning({ id: subscriptions.id })
+        // Sem linha atualizada: um pagamento tardio reativou a assinatura durante a chamada ao Asaas.
+        await logEvent(db, claimed, done ? "gateway_canceled" : "gateway_canceled_after_reactivation", claimed.status, system, {
+          gatewaySubscriptionId: claimed.gatewaySubscriptionId,
+          attempts: claimed.gatewayCancelAttempts,
+          alreadyRemoved,
+        })
+        if (!done) console.error("[billing] assinatura reativada foi cancelada no Asaas; verificar", claimed.gatewaySubscriptionId)
+        concluded++
+        continue
+      }
+
+      failedAttempts++
+      const exhausted = claimed.gatewayCancelAttempts >= GATEWAY_CANCEL_MAX_ATTEMPTS
+      const message = errorMessage(failure)
+      console.error("[billing] falha ao cancelar no Asaas", claimed.gatewaySubscriptionId, `tentativa ${claimed.gatewayCancelAttempts}`, message)
+      await db
+        .update(subscriptions)
+        .set({ gatewayCancelStatus: exhausted ? "failed" : "pending", gatewayCancelLastError: message, updatedAt: now })
+        .where(and(eq(subscriptions.id, id), eq(subscriptions.gatewayCancelStatus, "pending")))
+      await logEvent(db, claimed, "gateway_cancel_failed", claimed.status, system, {
+        gatewaySubscriptionId: claimed.gatewaySubscriptionId,
+        attempt: claimed.gatewayCancelAttempts,
+        error: message,
+        willRetry: !exhausted,
+      })
+    }
+  }
+
+  const counts = await db
+    .select({ status: subscriptions.gatewayCancelStatus, count: sql<number>`count(*)::int` })
+    .from(subscriptions)
+    .where(or(eq(subscriptions.gatewayCancelStatus, "pending"), eq(subscriptions.gatewayCancelStatus, "failed")))
+    .groupBy(subscriptions.gatewayCancelStatus)
+  const countOf = (status: string) => counts.find((c) => c.status === status)?.count ?? 0
+
+  return { concluded, failedAttempts, pending: countOf("pending"), failed: countOf("failed") } satisfies GatewayCancelSummary
+}
+
+/**
+ * Rotina diária: encerra cancelamentos agendados cujo período acabou, expira trials vencidos
+ * há mais de 3 dias sem nenhum pagamento aprovado e processa a fila de cancelamentos no Asaas.
+ */
+export async function runBillingMaintenance(db: BillingDb, now = new Date(), gateway?: CancelGateway) {
   const graceLimit = new Date(now.getTime() - 3 * 86_400_000)
   const ended = await db.transaction(async (tx) => {
     const due = await tx
@@ -268,30 +376,24 @@ export async function runBillingMaintenance(
 
     for (const sub of due) {
       const toStatus: SubscriptionStatus = sub.cancelAtPeriodEnd ? "canceled" : "expired"
+      // Trial expirado entra na fila para interromper as cobranças no Asaas. Cancelamentos
+      // agendados já foram encerrados no gateway no momento da solicitação.
+      const queueGatewayCancel = toStatus === "expired" && Boolean(sub.gatewaySubscriptionId) && !sub.gatewayCancelStatus
       await tx
         .update(subscriptions)
-        .set({ status: toStatus, canceledAt: sub.canceledAt ?? (toStatus === "canceled" ? now : null), endedAt: now, updatedAt: now })
+        .set({
+          status: toStatus,
+          canceledAt: sub.canceledAt ?? (toStatus === "canceled" ? now : null),
+          endedAt: now,
+          updatedAt: now,
+          ...(queueGatewayCancel ? { gatewayCancelStatus: "pending" as const } : {}),
+        })
         .where(eq(subscriptions.id, sub.id))
-      await logEvent(tx, sub, toStatus === "canceled" ? "canceled" : "trial_expired", toStatus, { userId: null, source: "system" })
+      await logEvent(tx, sub, toStatus === "canceled" ? "canceled" : "trial_expired", toStatus, system)
     }
     return due
   })
 
-  // Trial expirado: interrompe as cobranças no Asaas para não gerar boletos/Pix a quem não contratou.
-  // Cancelamentos agendados já foram encerrados no gateway no momento da solicitação.
-  let gatewayCanceled = 0
-  const gatewayErrors: string[] = []
-  if (gateway) {
-    for (const sub of ended) {
-      if (sub.cancelAtPeriodEnd || !sub.gatewaySubscriptionId) continue
-      try {
-        await gateway.cancelSubscription(sub.gatewaySubscriptionId)
-        gatewayCanceled++
-      } catch (error) {
-        console.error("[billing] falha ao cancelar no Asaas", sub.gatewaySubscriptionId, error)
-        gatewayErrors.push(sub.gatewaySubscriptionId)
-      }
-    }
-  }
-  return { updated: ended.length, gatewayCanceled, gatewayErrors }
+  const gatewayCancel = await processGatewayCancellations(db, now, gateway)
+  return { updated: ended.length, gatewayCancel }
 }
