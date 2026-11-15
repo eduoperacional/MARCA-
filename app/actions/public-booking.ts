@@ -6,8 +6,10 @@ import { and, eq } from "drizzle-orm"
 import { cleanText, fail, isOverlapError, isTime, isUuid } from "@/lib/actions/result"
 import { notify } from "@/lib/automations"
 import { getAvailableSlots } from "@/lib/availability"
+import { allowBookingForPhone, allowBookingFromIp, isPublicBookingBlocked } from "@/lib/booking-guard"
 import { getBusinessBySlug } from "@/lib/business"
 import { db } from "@/lib/db"
+import { clientIp, RATE_LIMITED, rateLimitExec } from "@/lib/rate-limit"
 import { appointments, clients, professionals, services } from "@/lib/db/schema"
 import { isValidPhone, normalizePhone } from "@/lib/phone"
 import { isValidLocalDate, toInstant } from "@/lib/time"
@@ -22,14 +24,18 @@ export async function createPublicBooking(input: {
   phone: string
   notes?: string | null
 }) {
+  if (!(await allowBookingFromIp(rateLimitExec, await clientIp()))) return fail(RATE_LIMITED)
+
   const business = await getBusinessBySlug(String(input.slug))
   if (!business || !business.onlineBookingEnabled) return fail("Agendamento online indisponível.")
+  if (await isPublicBookingBlocked(db, business)) return fail("Agendamento online indisponível.")
   if (!isUuid(input.serviceId)) return fail("Selecione um serviço.")
   if (input.professionalId && !isUuid(input.professionalId)) return fail("Profissional inválido.")
   if (!isValidLocalDate(input.date) || !isTime(input.start)) return fail("Selecione data e horário.")
   const name = cleanText(input.name, 120)
   if (!name || name.length < 2) return fail("Informe seu nome.")
   if (!isValidPhone(input.phone)) return fail("Informe um WhatsApp válido com DDD.")
+  if (!(await allowBookingForPhone(rateLimitExec, business.id, normalizePhone(input.phone)))) return fail(RATE_LIMITED)
 
   const [service] = await db
     .select()

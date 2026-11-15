@@ -6,8 +6,9 @@ import { and, eq, isNull } from "drizzle-orm"
 import { cleanText, fail, isTime, isUuid, toCents } from "@/lib/actions/result"
 import { authorize, NO_PERMISSION } from "@/lib/business"
 import { db } from "@/lib/db"
-import { businesses, expenses, notifications, professionals, timeBlocks } from "@/lib/db/schema"
+import { businesses, expenses, notifications } from "@/lib/db/schema"
 import { isValidLocalDate, timeToMinutes, toInstant } from "@/lib/time"
+import { insertTimeBlock, removeTimeBlock, type BlockActor } from "@/lib/time-blocks"
 import type { DaySchedule } from "@/lib/types"
 
 function done() {
@@ -26,26 +27,17 @@ export async function createTimeBlock(input: {
 }) {
   const access = await authorize()
   if (!access) return fail(NO_PERMISSION)
-  const business = access.business
   if (!isValidLocalDate(input.date)) return fail("Data inválida.")
   if (!isTime(input.start) || !isTime(input.end) || timeToMinutes(input.end) <= timeToMinutes(input.start)) {
     return fail("O horário final deve ser depois do inicial.")
   }
-  if (input.professionalId) {
-    if (!isUuid(input.professionalId)) return fail("Profissional inválido.")
-    const [owned] = await db
-      .select({ id: professionals.id })
-      .from(professionals)
-      .where(and(eq(professionals.id, input.professionalId), eq(professionals.businessId, business.id)))
-    if (!owned) return fail("Profissional não encontrado.")
-  }
-  await db.insert(timeBlocks).values({
-    businessId: business.id,
-    professionalId: input.professionalId,
+  const result = await insertTimeBlock(db, blockActor(access), {
+    professionalId: input.professionalId || null,
     startsAt: toInstant(input.date, input.start),
     endsAt: toInstant(input.date, input.end),
     reason: cleanText(input.reason, 200),
   })
+  if (!result.ok) return fail(result.error)
   return done()
 }
 
@@ -53,9 +45,13 @@ export async function deleteTimeBlock(id: string) {
   if (!isUuid(id)) return fail("Bloqueio inválido.")
   const access = await authorize()
   if (!access) return fail(NO_PERMISSION)
-  const business = access.business
-  await db.delete(timeBlocks).where(and(eq(timeBlocks.id, id), eq(timeBlocks.businessId, business.id)))
+  const result = await removeTimeBlock(db, blockActor(access), id)
+  if (!result.ok) return fail(result.error)
   return done()
+}
+
+function blockActor(access: NonNullable<Awaited<ReturnType<typeof authorize>>>): BlockActor {
+  return { businessId: access.business.id, permissions: access.permissions, professionalId: access.professionalId }
 }
 
 /* --------------------------------- Despesas ---------------------------------- */
