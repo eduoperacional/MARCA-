@@ -92,16 +92,16 @@ function isValidCnpj(d: string) {
   return calc(12) === Number(d[12]) && calc(13) === Number(d[13])
 }
 
-/** Planos do autoatendimento. Ocultos e de teste só aparecem para os e-mails liberados. */
-export async function listPublicPlans(db: BillingDb, viewerEmail: string | null = null) {
+/** Planos do autoatendimento. O plano de teste aparece para todos; outros ocultos nunca aparecem. */
+export async function listPublicPlans(db: BillingDb) {
   const rows = await db.select().from(plans).where(eq(plans.isActive, true)).orderBy(asc(plans.sortOrder), asc(plans.priceCents))
-  return rows.filter((plan) => isPlanAvailableTo(plan, viewerEmail))
+  return rows.filter((plan) => isPlanAvailableTo(plan))
 }
 
-/** Plano ativo e disponível para quem está contratando; a mesma regra da listagem vale no servidor. */
-export async function getActivePlan(db: BillingDb, planId: string, viewerEmail: string | null = null) {
+/** Plano ativo e disponível no autoatendimento; a mesma regra da listagem vale no servidor. */
+export async function getActivePlan(db: BillingDb, planId: string) {
   const [plan] = await db.select().from(plans).where(and(eq(plans.id, planId), eq(plans.isActive, true))).limit(1)
-  return plan && isPlanAvailableTo(plan, viewerEmail) ? plan : null
+  return plan && isPlanAvailableTo(plan) ? plan : null
 }
 
 /** O estabelecimento já criou alguma assinatura de plano de teste no Asaas (em qualquer status). */
@@ -164,7 +164,7 @@ export async function startCheckout(
   }
 ) {
   const now = input.now ?? new Date()
-  const plan = await getActivePlan(db, input.planId, input.user.email)
+  const plan = await getActivePlan(db, input.planId)
   if (!plan) throw new BillingRuleError("Plano indisponível.")
 
   const current = await getCurrentSubscription(db, input.business.id)
@@ -248,9 +248,9 @@ export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub
     throw new BillingRuleError("Regularize a cobrança em aberto antes de mudar de plano.")
   }
   if (sub.cancelAtPeriodEnd) throw new BillingRuleError("A assinatura tem cancelamento agendado.")
-  // Sem e-mail: planos ocultos e de teste nunca são destino de troca, nem para e-mails liberados.
-  const plan = await getActivePlan(db, planId, null)
-  if (!plan) throw new BillingRuleError("Plano indisponível.")
+  // Planos ocultos e de teste nunca são destino de troca: o teste só entra por contratação nova.
+  const plan = await getActivePlan(db, planId)
+  if (!plan || plan.isTest) throw new BillingRuleError("Plano indisponível.")
   if (plan.id === sub.planId) throw new BillingRuleError("Este já é o seu plano atual.")
 
   await gateway.updateSubscription(sub.gatewaySubscriptionId, {

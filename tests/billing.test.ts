@@ -668,38 +668,38 @@ describe("plano de teste interno (011)", () => {
     assert.equal(test5.isHidden, true)
   })
 
-  test("listagem esconde o plano para e-mails não liberados e mostra para os liberados", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: ` ${TESTER.toUpperCase()} , outro@x.com` })
+  test("listagem mostra o plano de teste para qualquer pessoa, sem BILLING_TEST_EMAILS", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
     try {
-      const anon = await listPublicPlans(db, null)
-      const other = await listPublicPlans(db, "cliente@x.com")
-      const tester = await listPublicPlans(db, TESTER)
-      assert.ok(!anon.some((p) => p.isTest))
-      assert.ok(!other.some((p) => p.isTest))
-      assert.ok(tester.some((p) => p.code === "teste-5"))
-      assert.equal(tester.filter((p) => !p.isTest).length, other.length)
+      const plans = await listPublicPlans(db)
+      assert.ok(plans.some((p) => p.code === "teste-5"))
+      assert.equal(plans.filter((p) => !p.isTest).length, 6)
     } finally {
       restore()
     }
   })
 
-  test("sem BILLING_TEST_EMAILS ninguém vê o plano de teste", () => {
-    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: true }, TESTER, {}), false)
-    assert.equal(isPlanAvailableTo({ isHidden: false, isTest: false }, null, {}), true)
-    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: false }, TESTER, { BILLING_TEST_EMAILS: TESTER }), false)
+  test("plano de teste disponível a todos; outros planos ocultos continuam fora", () => {
+    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: true }), true)
+    assert.equal(isPlanAvailableTo({ isHidden: false, isTest: false }), true)
+    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: false }), false)
   })
 
-  test("checkout recusa no servidor e-mail não liberado, mesmo com o planId correto", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+  test("qualquer e-mail contrata o plano de teste, sem lista de liberação", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
     try {
-      await assert.rejects(testCheckout("intruso@x.com"), /Plano indisponível/)
+      const { calls, result } = await testCheckout("cliente-qualquer@x.com")
+      const create = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
+      assert.equal(create.value, 5)
+      assert.equal(create.maxPayments, 1)
+      assert.ok(result.subscription.gatewaySubscriptionId)
     } finally {
       restore()
     }
   })
 
   test("cobrança imediata e única: sem trial e com maxPayments: 1", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
     try {
       const { calls, result } = await testCheckout()
       const create = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
@@ -721,7 +721,7 @@ describe("plano de teste interno (011)", () => {
   })
 
   test("pagamento da cobrança única agenda o fim e a rotina diária encerra o acesso", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
     try {
       const { business, result } = await testCheckout()
       const sub = result.subscription
@@ -741,7 +741,7 @@ describe("plano de teste interno (011)", () => {
   })
 
   test("SUBSCRIPTION_INACTIVATED do Asaas antes do pagamento não encerra a assinatura de teste", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
     try {
       const { result } = await testCheckout()
       const sub = result.subscription
@@ -756,7 +756,7 @@ describe("plano de teste interno (011)", () => {
   })
 
   test("o mesmo estabelecimento não contrata o teste de novo sem autorização explícita", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER, BILLING_TEST_REPEAT_EMAILS: undefined })
+    const restore = withEnv({ BILLING_TEST_EMAILS: undefined, BILLING_TEST_REPEAT_EMAILS: undefined })
     try {
       const { business, result } = await testCheckout()
       const sub = result.subscription
@@ -774,8 +774,8 @@ describe("plano de teste interno (011)", () => {
     }
   })
 
-  test("assinante comercial não troca para o plano de teste, mesmo com e-mail liberado", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+  test("assinante comercial não troca para o plano de teste, mesmo com ele visível", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
     try {
       const { result } = await checkout()
       const test5 = await planByCode("teste-5")
