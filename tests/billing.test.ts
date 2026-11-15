@@ -9,7 +9,14 @@ import { drizzle } from "drizzle-orm/pglite"
 
 import { computeBillingAccess } from "@/lib/billing/access"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
-import { cancelOwnSubscription, startCheckout, type CheckoutGateway } from "@/lib/billing/self-service"
+import {
+  cancelOwnSubscription,
+  changeOwnPlan,
+  listPublicPlans,
+  startCheckout,
+  type CheckoutGateway,
+} from "@/lib/billing/self-service"
+import { isPlanAvailableTo } from "@/lib/billing/test-plan"
 import { GATEWAY_CANCEL_MAX_ATTEMPTS, runBillingMaintenance } from "@/lib/billing/subscriptions"
 import { handleAsaasWebhook } from "@/lib/billing/webhook"
 import * as schema from "@/lib/db/schema"
@@ -167,9 +174,10 @@ async function checkout(createdAt = new Date()) {
 }
 
 describe("migrations", () => {
-  test("002 a 010 executam em sequência e criam 6 planos", async () => {
+  test("002 a 011 executam em sequência: 6 planos comerciais + 1 de teste", async () => {
     const rows = await db.select().from(schema.plans)
-    assert.equal(rows.length, 6)
+    assert.equal(rows.length, 7)
+    assert.deepEqual(rows.filter((p) => p.isTest).map((p) => p.code), ["teste-5"])
   })
 
   test("são idempotentes (execução repetida não falha)", async () => {
@@ -179,10 +187,11 @@ describe("migrations", () => {
       "008-checkout-assinaturas.sql",
       "009-fila-cancelamento-gateway.sql",
       "010-enfileirar-trials-expirados.sql",
+      "011-plano-teste-oculto.sql",
     ]) {
       await pg.exec(fs.readFileSync(path.join(dir, file), "utf8"))
     }
-    assert.equal((await db.select().from(schema.plans)).length, 6)
+    assert.equal((await db.select().from(schema.plans)).length, 7)
   })
 })
 
@@ -619,4 +628,165 @@ describe("permissões de acesso", () => {
   })
 })
 
-void planByCode
+describe("plano de teste interno (011)", () => {
+  const TESTER = "tester@marcai.com"
+
+  function withEnv(vars: Record<string, string | undefined>) {
+    const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+    Object.assign(process.env, vars)
+    for (const [k, v] of Object.entries(vars)) if (v === undefined) delete process.env[k]
+    return () => {
+      for (const [k, v] of Object.entries(previous)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+  }
+
+  async function testCheckout(email = TESTER, business?: Awaited<ReturnType<typeof newBusiness>>) {
+    const plan = await planByCode("teste-5")
+    const { gateway, calls } = fakeGateway()
+    const b = business ?? (await newBusiness())
+    const result = await startCheckout(db, gateway, {
+      business: b,
+      user: { id: "u-test", email },
+      planId: plan.id,
+      billingType: "PIX",
+      cpfCnpj: "12345678909",
+    })
+    return { business: b, plan, calls, result }
+  }
+
+  test("migration 011 não altera preços nem visibilidade de Start, Pro e Elite", async () => {
+    const rows = await db.select().from(schema.plans)
+    const commercial = rows.filter((p) => !p.isTest)
+    assert.equal(commercial.length, 6)
+    assert.ok(commercial.every((p) => !p.isHidden))
+    const test5 = rows.find((p) => p.code === "teste-5")!
+    assert.equal(test5.priceCents, 500)
+    assert.equal(test5.trialDays, 0)
+    assert.equal(test5.isHidden, true)
+  })
+
+  test("listagem esconde o plano para e-mails não liberados e mostra para os liberados", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: ` ${TESTER.toUpperCase()} , outro@x.com` })
+    try {
+      const anon = await listPublicPlans(db, null)
+      const other = await listPublicPlans(db, "cliente@x.com")
+      const tester = await listPublicPlans(db, TESTER)
+      assert.ok(!anon.some((p) => p.isTest))
+      assert.ok(!other.some((p) => p.isTest))
+      assert.ok(tester.some((p) => p.code === "teste-5"))
+      assert.equal(tester.filter((p) => !p.isTest).length, other.length)
+    } finally {
+      restore()
+    }
+  })
+
+  test("sem BILLING_TEST_EMAILS ninguém vê o plano de teste", () => {
+    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: true }, TESTER, {}), false)
+    assert.equal(isPlanAvailableTo({ isHidden: false, isTest: false }, null, {}), true)
+    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: false }, TESTER, { BILLING_TEST_EMAILS: TESTER }), false)
+  })
+
+  test("checkout recusa no servidor e-mail não liberado, mesmo com o planId correto", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    try {
+      await assert.rejects(testCheckout("intruso@x.com"), /Plano indisponível/)
+    } finally {
+      restore()
+    }
+  })
+
+  test("cobrança imediata e única: sem trial e com maxPayments: 1", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    try {
+      const { calls, result } = await testCheckout()
+      const create = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
+      assert.equal(create.maxPayments, 1)
+      assert.equal(create.value, 5)
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date())
+      assert.equal(create.nextDueDate, today)
+      assert.equal(result.subscription.trialEndsAt, null)
+    } finally {
+      restore()
+    }
+  })
+
+  test("planos comerciais continuam com trial e sem maxPayments", async () => {
+    const { calls, result } = await checkout()
+    const create = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
+    assert.equal("maxPayments" in create, false)
+    assert.ok(result.subscription.trialEndsAt)
+  })
+
+  test("pagamento da cobrança única agenda o fim e a rotina diária encerra o acesso", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    try {
+      const { business, result } = await testCheckout()
+      const sub = result.subscription
+      await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_${crypto.randomUUID()}`, { value: 5 }))
+      const paid = await getSub(sub.id)
+      assert.equal(paid.status, "active")
+      assert.equal(paid.cancelAtPeriodEnd, true)
+      assert.ok(paid.currentPeriodEnd)
+
+      await runBillingMaintenance(db, new Date(paid.currentPeriodEnd!.getTime() + 60_000))
+      const ended = await getSub(sub.id)
+      assert.equal(ended.status, "canceled")
+      assert.equal(computeBillingAccess(business as never, ended as never, new Date(paid.currentPeriodEnd!.getTime() + 60_000)).allowed, false)
+    } finally {
+      restore()
+    }
+  })
+
+  test("SUBSCRIPTION_INACTIVATED do Asaas antes do pagamento não encerra a assinatura de teste", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    try {
+      const { result } = await testCheckout()
+      const sub = result.subscription
+      const before = await getSub(sub.id)
+      await webhook({ id: `evt_${crypto.randomUUID()}`, event: "SUBSCRIPTION_INACTIVATED", subscription: { id: sub.gatewaySubscriptionId, externalReference: sub.id } })
+      const after = await getSub(sub.id)
+      assert.equal(after.status, before.status)
+      assert.equal(after.endedAt, null)
+    } finally {
+      restore()
+    }
+  })
+
+  test("o mesmo estabelecimento não contrata o teste de novo sem autorização explícita", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER, BILLING_TEST_REPEAT_EMAILS: undefined })
+    try {
+      const { business, result } = await testCheckout()
+      const sub = result.subscription
+      await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_${crypto.randomUUID()}`, { value: 5 }))
+      const paid = await getSub(sub.id)
+      await runBillingMaintenance(db, new Date(paid.currentPeriodEnd!.getTime() + 60_000))
+
+      await assert.rejects(testCheckout(TESTER, business), /já foi utilizado/)
+
+      process.env.BILLING_TEST_REPEAT_EMAILS = TESTER
+      const again = await testCheckout(TESTER, business)
+      assert.ok(again.result.subscription.gatewaySubscriptionId)
+    } finally {
+      restore()
+    }
+  })
+
+  test("assinante comercial não troca para o plano de teste, mesmo com e-mail liberado", async () => {
+    const restore = withEnv({ BILLING_TEST_EMAILS: TESTER })
+    try {
+      const { result } = await checkout()
+      const test5 = await planByCode("teste-5")
+      const { gateway, calls } = fakeGateway()
+      await assert.rejects(
+        changeOwnPlan(db, gateway, await getSub(result.subscription.id), test5.id, { userId: "u1", source: "owner" }),
+        /Plano indisponível/
+      )
+      assert.equal(calls.length, 0)
+    } finally {
+      restore()
+    }
+  })
+})

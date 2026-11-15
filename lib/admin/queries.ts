@@ -197,7 +197,7 @@ export async function getSubscriptionSummary(db: BillingDb = defaultDb) {
       count(*) FILTER (WHERE status IN ('awaiting_payment', 'payment_pending'))::int AS pending,
       count(*) FILTER (WHERE status = 'past_due')::int AS past_due,
       count(*) FILTER (WHERE status = 'active' AND current_period_end BETWEEN now() AND now() + interval '7 days')::int AS renewing_7d,
-      coalesce(sum(CASE WHEN status = 'active' THEN
+      coalesce(sum(CASE WHEN status = 'active' AND NOT EXISTS (SELECT 1 FROM plans tp WHERE tp.id = plan_id AND tp.is_test) THEN
         CASE WHEN billing_interval = 'year' THEN price_cents / 12.0 ELSE price_cents END END), 0)::bigint AS mrr_cents
     FROM subscriptions
   `)) as unknown as QueryRows

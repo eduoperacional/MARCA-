@@ -78,6 +78,7 @@ export function createSubscription(input: {
   description: string
   externalReference: string
   billingType?: AsaasBillingType
+  maxPayments?: number
 }) {
   return request<AsaasSubscription>("/subscriptions", {
     method: "POST",

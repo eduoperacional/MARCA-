@@ -18,7 +18,7 @@ export default async function PlansPage() {
   if (access.role !== "owner") redirect("/assinatura")
 
   const [rows, sub, hadSub] = await Promise.all([
-    listPublicPlans(db),
+    listPublicPlans(db, access.user.email),
     getCurrentSubscription(db, access.business.id),
     hasHadSubscription(db, access.business.id),
   ])
