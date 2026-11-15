@@ -3,7 +3,7 @@
 import { useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ChevronDown, Globe, LifeBuoy, LogOut, Settings, UserRound } from "lucide-react"
+import { ChevronDown, CreditCard, Globe, LifeBuoy, LogOut, Settings, UserRound } from "lucide-react"
 import { toast } from "sonner"
 
 import { useCan, useWorkspace } from "@/components/layout/workspace-context"
@@ -80,6 +80,10 @@ export function UserMenu() {
               Configurações
             </DropdownMenuItem>
           )}
+          <DropdownMenuItem render={<Link href="/assinatura" />}>
+            <CreditCard />
+            Assinatura
+          </DropdownMenuItem>
           <DropdownMenuItem render={<Link href="/painel/ajuda" />}>
             <LifeBuoy />
             Ajuda e suporte

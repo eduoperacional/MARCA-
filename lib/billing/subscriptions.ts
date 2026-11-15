@@ -6,7 +6,7 @@ import { ASAAS, type BillingDb } from "@/lib/billing/process-asaas-event"
 
 const { businessNotes, businessSuspensions, plans, subscriptionEvents, subscriptions } = schema
 
-type Actor = { userId: string | null; source: "admin" | "system" }
+export type Actor = { userId: string | null; source: "admin" | "system" | "owner" }
 
 const ENDED: SubscriptionStatus[] = ["canceled", "expired"]
 

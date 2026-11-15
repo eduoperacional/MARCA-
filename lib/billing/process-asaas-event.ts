@@ -24,6 +24,8 @@ export type AsaasPayment = {
   clientPaymentDate?: string | null
   externalReference?: string | null
   description?: string | null
+  invoiceUrl?: string | null
+  bankSlipUrl?: string | null
   refunds?: { value?: number; status?: string }[] | null
 }
 
@@ -177,30 +179,49 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
         : undefined
   const paymentMethod = payment.billingType ? (BILLING_TYPE[payment.billingType] ?? payment.billingType.toLowerCase()) : null
 
-  const [existing] = await tx
-    .select()
-    .from(billingTransactions)
-    .where(and(eq(billingTransactions.gateway, ASAAS), eq(billingTransactions.gatewayTransactionId, payment.id)))
-    .for("update")
-    .limit(1)
+  const dueDate = parseAsaasDate(payment.dueDate)
+  const links = {
+    ...(payment.invoiceUrl ? { invoiceUrl: payment.invoiceUrl } : {}),
+    ...(payment.bankSlipUrl ? { bankSlipUrl: payment.bankSlipUrl } : {}),
+  }
 
+  const selectExisting = async () => {
+    const [row] = await tx
+      .select()
+      .from(billingTransactions)
+      .where(and(eq(billingTransactions.gateway, ASAAS), eq(billingTransactions.gatewayTransactionId, payment.id)))
+      .for("update")
+      .limit(1)
+    return row ?? null
+  }
+
+  let existing = await selectExisting()
   let becameApproved = false
   if (!existing) {
-    await tx.insert(billingTransactions).values({
-      businessId: sub.businessId,
-      subscriptionId: sub.id,
-      planId: sub.planId,
-      amountCents,
-      refundedCents: refundedCents ?? 0,
-      status: nextStatus,
-      paymentMethod,
-      gateway: ASAAS,
-      gatewayTransactionId: payment.id,
-      description: payment.description ?? null,
-      paidAt,
-    })
-    becameApproved = nextStatus === "approved"
-  } else {
+    // ON CONFLICT: o checkout pode ter registrado a cobrança pendente ao mesmo tempo.
+    const inserted = await tx
+      .insert(billingTransactions)
+      .values({
+        businessId: sub.businessId,
+        subscriptionId: sub.id,
+        planId: sub.planId,
+        amountCents,
+        refundedCents: refundedCents ?? 0,
+        status: nextStatus,
+        paymentMethod,
+        gateway: ASAAS,
+        gatewayTransactionId: payment.id,
+        description: payment.description ?? null,
+        dueDate,
+        ...links,
+        paidAt,
+      })
+      .onConflictDoNothing({ target: [billingTransactions.gateway, billingTransactions.gatewayTransactionId] })
+      .returning({ id: billingTransactions.id })
+    if (inserted.length) becameApproved = nextStatus === "approved"
+    else existing = await selectExisting()
+  }
+  if (existing) {
     const transition = existing.status !== nextStatus && ALLOWED_TRANSITIONS[existing.status].includes(nextStatus)
     await tx
       .update(billingTransactions)
@@ -209,6 +230,8 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
         amountCents: existing.status === "pending" ? amountCents : existing.amountCents,
         refundedCents: refundedCents ?? existing.refundedCents,
         paymentMethod: paymentMethod ?? existing.paymentMethod,
+        dueDate: dueDate ?? existing.dueDate,
+        ...links,
         paidAt: existing.paidAt ?? paidAt,
         updatedAt: new Date(),
       })

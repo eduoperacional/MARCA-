@@ -4,7 +4,12 @@ import { AppHeader } from "@/components/layout/app-header"
 import { AppSidebar } from "@/components/layout/app-sidebar"
 import { WorkspaceProvider } from "@/components/layout/workspace-context"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
-import { getSuspension } from "@/lib/billing/subscriptions"
+import Link from "next/link"
+
+import { BillingBanner } from "@/components/billing/billing-banner"
+import { buttonVariants } from "@/components/ui/button"
+import { computeBillingAccess, isBillingEnforced } from "@/lib/billing/access"
+import { getCurrentSubscription, getSuspension } from "@/lib/billing/subscriptions"
 import { listMemberships, requireAccess } from "@/lib/business"
 import { db } from "@/lib/db"
 
@@ -44,6 +49,25 @@ async function DashboardShell({ children }: { children: React.ReactNode }) {
     )
   }
 
+  const sub = await getCurrentSubscription(db, access.business.id).catch(() => null)
+  const billing = computeBillingAccess(access.business, sub)
+  if (!billing.allowed && isBillingEnforced()) {
+    return (
+      <main className="flex min-h-svh items-center justify-center bg-background px-4">
+        <div className="flex max-w-md flex-col items-center gap-4 rounded-xl border bg-card p-6 text-center">
+          <h1 className="text-xl font-semibold text-balance text-foreground">Assinatura necessária</h1>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            {billing.notice}{" "}
+            {access.role === "owner"
+              ? "Escolha um plano ou pague a cobrança pendente para voltar a usar o painel."
+              : "Peça ao proprietário do estabelecimento para regularizar a assinatura."}
+          </p>
+          <Link href="/assinatura" className={buttonVariants()}>Ver assinatura</Link>
+        </div>
+      </main>
+    )
+  }
+
   return (
     <WorkspaceProvider value={workspace}>
       <SidebarProvider>
@@ -56,6 +80,7 @@ async function DashboardShell({ children }: { children: React.ReactNode }) {
           >
             <AppHeader />
           </Suspense>
+          <BillingBanner billing={billing} isOwner={access.role === "owner"} enforced={isBillingEnforced()} />
           <main className="flex flex-1 flex-col px-4 py-6 md:px-6 lg:px-8 lg:py-8">{children}</main>
         </SidebarInset>
       </SidebarProvider>

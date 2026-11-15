@@ -61,6 +61,8 @@ export function updateCustomer(id: string, input: { cpfCnpj: string }) {
   return request<AsaasCustomer>(`/customers/${encodeURIComponent(id)}`, { method: "PUT", body: input })
 }
 
+export type AsaasBillingType = "PIX" | "BOLETO" | "CREDIT_CARD" | "UNDEFINED"
+
 export function createSubscription(input: {
   customer: string
   value: number
@@ -68,14 +70,54 @@ export function createSubscription(input: {
   cycle: "MONTHLY" | "YEARLY"
   description: string
   externalReference: string
+  billingType?: AsaasBillingType
 }) {
   return request<AsaasSubscription>("/subscriptions", {
     method: "POST",
-    body: { ...input, billingType: "UNDEFINED" },
+    body: { ...input, billingType: input.billingType ?? "UNDEFINED" },
   })
 }
 
-export function updateSubscription(id: string, input: { value: number; cycle: "MONTHLY" | "YEARLY"; description: string }) {
+export function getSubscription(id: string) {
+  return request<AsaasSubscription>(`/subscriptions/${encodeURIComponent(id)}`)
+}
+
+export async function findCustomerByReference(externalReference: string) {
+  const result = await request<{ data: AsaasCustomer[] }>(
+    `/customers?externalReference=${encodeURIComponent(externalReference)}&limit=1`
+  )
+  return result.data?.[0] ?? null
+}
+
+export type AsaasPaymentDetail = AsaasPaymentSummary & {
+  billingType: string
+  bankSlipUrl: string | null
+  subscription?: string | null
+}
+
+export function getPayment(id: string) {
+  return request<AsaasPaymentDetail>(`/payments/${encodeURIComponent(id)}`)
+}
+
+export function getPixQrCode(paymentId: string) {
+  return request<{ encodedImage: string; payload: string; expirationDate: string }>(
+    `/payments/${encodeURIComponent(paymentId)}/pixQrCode`
+  )
+}
+
+/** Formas de pagamento habilitadas na conta (ASAAS_BILLING_TYPES="PIX,BOLETO,CREDIT_CARD"). */
+export function enabledBillingTypes(): Exclude<AsaasBillingType, "UNDEFINED">[] {
+  const all = ["PIX", "BOLETO", "CREDIT_CARD"] as const
+  const raw = process.env.ASAAS_BILLING_TYPES
+  if (!raw) return [...all]
+  const wanted = new Set(raw.split(",").map((v) => v.trim().toUpperCase()))
+  return all.filter((type) => wanted.has(type))
+}
+
+export function updateSubscription(
+  id: string,
+  input: { value: number; cycle: "MONTHLY" | "YEARLY"; description: string; billingType?: AsaasBillingType }
+) {
   return request<AsaasSubscription>(`/subscriptions/${encodeURIComponent(id)}`, {
     method: "PUT",
     body: { ...input, updatePendingPayments: true },
