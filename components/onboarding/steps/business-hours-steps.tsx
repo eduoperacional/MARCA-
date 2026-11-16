@@ -3,6 +3,7 @@
 import { useState } from "react"
 
 import { saveBusinessStep, saveHoursStep } from "@/app/actions/onboarding"
+import { WhatsappPhoneInput } from "@/components/shared/whatsapp-phone-input"
 import { Input } from "@/components/ui/input"
 import { Field, ImagePicker, StepActions, StepGuide, WeekScheduleEditor, selectClass, type Saver } from "@/components/onboarding/wizard-ui"
 import type { WizardBusiness } from "@/components/onboarding/types"
@@ -38,6 +39,7 @@ export function BusinessStep({ business, pending, onSubmit, createNew, mode }: S
             displayName: get("displayName"),
             primaryColor: color,
             logoUrl: logo,
+            notificationPhone: get("notificationPhone"),
             createNew,
             mode,
           })
@@ -58,6 +60,13 @@ export function BusinessStep({ business, pending, onSubmit, createNew, mode }: S
       </Field>
       <Field id="phone" label="Telefone / WhatsApp do estabelecimento" hint="Com DDD. Ex.: (11) 98888-7777">
         <Input id="phone" name="phone" type="tel" required defaultValue={business?.phone} placeholder="(11) 98888-7777" />
+      </Field>
+      <Field
+        id="notificationPhone"
+        label="WhatsApp para receber notificações"
+        hint="Opcional. Você recebe avisos de novos agendamentos, cancelamentos e reagendamentos. Pode alterar depois em Configurações."
+      >
+        <WhatsappPhoneInput id="notificationPhone" name="notificationPhone" />
       </Field>
       <Field id="address" label="Endereço">
         <Input id="address" name="address" required maxLength={200} defaultValue={business?.address} placeholder="Rua, número, bairro" />

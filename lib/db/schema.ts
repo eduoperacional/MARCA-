@@ -157,6 +157,33 @@ export const notifications = pgTable("notifications", {
   createdAt: createdAt(),
 })
 
+/** Preferências de notificação por WhatsApp do proprietário, uma linha por estabelecimento (script 015). */
+export const businessWhatsappSettings = pgTable("business_whatsapp_settings", {
+  businessId: uuid("business_id").primaryKey(),
+  phone: text("phone"),
+  enabled: boolean("enabled").notNull().default(true),
+  notifyNewBooking: boolean("notify_new_booking").notNull().default(true),
+  notifyCancellation: boolean("notify_cancellation").notNull().default(true),
+  notifyReschedule: boolean("notify_reschedule").notNull().default(true),
+  lastTestAt: timestamp("last_test_at", { withTimezone: true }),
+  lastTestStatus: text("last_test_status"),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** Registro de cada tentativa de envio por WhatsApp (auditoria e diagnóstico). */
+export const whatsappDeliveries = pgTable("whatsapp_deliveries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  appointmentId: uuid("appointment_id"),
+  event: text("event").notNull(),
+  toPhone: text("to_phone").notNull(),
+  status: text("status").$type<"sent" | "failed" | "skipped">().notNull(),
+  providerMessageId: text("provider_message_id"),
+  error: text("error"),
+  createdAt: createdAt(),
+})
+
 /* ------------------------- Contas, equipe e convites ------------------------ */
 
 /** Tabela de usuários do Better Auth (somente leitura pelo app; escrita via Better Auth). */

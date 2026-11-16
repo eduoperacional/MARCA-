@@ -15,6 +15,8 @@ import { recordSetupChange, type SetupMode } from "@/lib/setup-state"
 import { isValidSlug, slugify } from "@/lib/slug"
 import { isSlugAvailable, uniqueSlugFrom } from "@/lib/slug-server"
 import type { DaySchedule } from "@/lib/types"
+import { upsertWhatsappSettings } from "@/lib/whatsapp/service"
+import { toWhatsappNumber } from "@/lib/whatsapp/templates"
 
 type Result = { ok: true; ready?: boolean } | { ok: false; error: string }
 
@@ -72,6 +74,8 @@ export interface BusinessStepInput {
   displayName: string
   primaryColor: string
   logoUrl: string | null
+  /** Opcional. Número do proprietário que recebe avisos de agendamento no WhatsApp. */
+  notificationPhone?: string
   /** Cria um novo estabelecimento em vez de editar o ativo (fluxo "novo estabelecimento"). */
   createNew: boolean
   mode: SetupMode
@@ -98,6 +102,17 @@ export async function saveBusinessStep(input: BusinessStepInput): Promise<Result
   const logo = cleanImage(input.logoUrl)
   if (logo.error) return fail(logo.error)
   const mode: SetupMode = input.mode === "manual" ? "manual" : "guided"
+  const rawNotificationPhone = String(input.notificationPhone ?? "").trim()
+  const notificationPhone = rawNotificationPhone ? toWhatsappNumber(rawNotificationPhone) : null
+  if (rawNotificationPhone && !notificationPhone) return fail("Informe um WhatsApp válido para notificações, com DDD.")
+  const saveNotificationPhone = async (businessId: string) => {
+    if (!notificationPhone) return
+    try {
+      await upsertWhatsappSettings(businessId, { phone: notificationPhone, enabled: true })
+    } catch (error) {
+      console.error("[whatsapp] falha ao salvar número no onboarding", error)
+    }
+  }
 
   const values = {
     name,
@@ -115,6 +130,7 @@ export async function saveBusinessStep(input: BusinessStepInput): Promise<Result
   if (access) {
     if (access.role !== "owner") return fail("Somente o proprietário pode alterar estes dados.")
     await db.update(businesses).set(values).where(eq(businesses.id, access.business.id))
+    await saveNotificationPhone(access.business.id)
     return finish(access.business.id, ["business"])
   }
 
@@ -134,6 +150,7 @@ export async function saveBusinessStep(input: BusinessStepInput): Promise<Result
     return business.id
   })
   await setActiveBusiness(businessId)
+  await saveNotificationPhone(businessId)
   await recordSetupChange(db, businessId, { reviewed: ["business"], mode })
   revalidatePath("/", "layout")
   return { ok: true, ready: false }
