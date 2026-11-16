@@ -1,8 +1,8 @@
-import { and, asc, desc, eq, isNotNull } from "drizzle-orm"
+import { and, asc, desc, eq } from "drizzle-orm"
 
 import * as schema from "@/lib/db/schema"
 import type { PlanRow, SubscriptionRow } from "@/lib/db/schema"
-import { DEFAULT_TRIAL_DAYS } from "@/lib/billing/access"
+import { businessTrialEnd } from "@/lib/billing/access"
 import { ASAAS, parseAsaasDate, reprocessFailedEvents, type BillingDb } from "@/lib/billing/process-asaas-event"
 import {
   attachGatewaySubscription,
@@ -16,11 +16,9 @@ import {
   revertScheduledCancel,
   type Actor,
 } from "@/lib/billing/subscriptions"
-import { canRepeatTestPlan, isPlanAvailableTo } from "@/lib/billing/test-plan"
+import { isPlanAvailableTo } from "@/lib/billing/test-plan"
 
-const { billingTransactions, plans, subscriptions } = schema
-
-const DAY = 86_400_000
+const { billingTransactions, plans } = schema
 
 export type BillingType = "PIX" | "BOLETO" | "CREDIT_CARD"
 
@@ -92,7 +90,7 @@ function isValidCnpj(d: string) {
   return calc(12) === Number(d[12]) && calc(13) === Number(d[13])
 }
 
-/** Planos do autoatendimento. O plano de teste aparece para todos; outros ocultos nunca aparecem. */
+/** Planos do autoatendimento (Start, Pro e Elite). Planos ocultos e de teste nunca aparecem. */
 export async function listPublicPlans(db: BillingDb) {
   const rows = await db.select().from(plans).where(eq(plans.isActive, true)).orderBy(asc(plans.sortOrder), asc(plans.priceCents))
   return rows.filter((plan) => isPlanAvailableTo(plan))
@@ -102,17 +100,6 @@ export async function listPublicPlans(db: BillingDb) {
 export async function getActivePlan(db: BillingDb, planId: string) {
   const [plan] = await db.select().from(plans).where(and(eq(plans.id, planId), eq(plans.isActive, true))).limit(1)
   return plan && isPlanAvailableTo(plan) ? plan : null
-}
-
-/** O estabelecimento já criou alguma assinatura de plano de teste no Asaas (em qualquer status). */
-export async function hasUsedTestPlan(db: BillingDb, businessId: string) {
-  const [row] = await db
-    .select({ id: subscriptions.id })
-    .from(subscriptions)
-    .innerJoin(plans, eq(plans.id, subscriptions.planId))
-    .where(and(eq(subscriptions.businessId, businessId), eq(plans.isTest, true), isNotNull(subscriptions.gatewaySubscriptionId)))
-    .limit(1)
-  return Boolean(row)
 }
 
 /**
@@ -171,9 +158,6 @@ export async function startCheckout(
   if (current?.gatewaySubscriptionId) {
     throw new BillingRuleError("Você já possui uma assinatura em andamento. Use a opção de mudar de plano.")
   }
-  if (plan.isTest && !canRepeatTestPlan(input.user.email) && (await hasUsedTestPlan(db, input.business.id))) {
-    throw new BillingRuleError("O plano de teste já foi utilizado por este estabelecimento.")
-  }
 
   let customerId =
     (await getGatewayCustomerId(db, input.business.id)) ??
@@ -194,18 +178,17 @@ export async function startCheckout(
     ).id
   }
 
-  // Trial é do estabelecimento (desde o cadastro), não do plano: contratar não reinicia o teste.
-  // O plano de teste interno sempre cobra no mesmo dia.
-  const trialEnd = new Date(input.business.createdAt.getTime() + DEFAULT_TRIAL_DAYS * DAY)
-  const inTrial = !plan.isTest && !(await hasHadSubscription(db, input.business.id)) && trialEnd > now
-  const trialDays = inTrial ? Math.max(1, Math.ceil((trialEnd.getTime() - now.getTime()) / DAY)) : 0
+  // Trial é do estabelecimento (7 dias desde o cadastro), não do plano: contratar, cancelar ou
+  // recontratar não reinicia o prazo. A primeira cobrança do Asaas vence exatamente no fim dele.
+  const trialEnd = businessTrialEnd(input.business)
+  const inTrial = !(await hasHadSubscription(db, input.business.id)) && trialEnd > now
 
   let sub: SubscriptionRow
   try {
     sub = await createLocalSubscription(db, {
       businessId: input.business.id,
       plan,
-      trialDays,
+      trialEndsAt: inTrial ? trialEnd : null,
       gatewayCustomerId: customerId,
       now,
     })
@@ -225,7 +208,6 @@ export async function startCheckout(
       description: planDescription(plan),
       externalReference: sub.id,
       billingType: input.billingType,
-      ...(plan.isTest ? { maxPayments: 1 } : {}),
     })
   } catch (error) {
     await discardLocalSubscription(db, sub.id)
