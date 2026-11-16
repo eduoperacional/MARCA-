@@ -11,12 +11,17 @@ export const BUSINESS_SEGMENTS = [
 
 export const BRAZIL_STATES = "AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO".split(" ")
 
-export const ONBOARDING_STEPS = [
-  { step: 1, title: "Estabelecimento", description: "Dados do seu negócio" },
-  { step: 2, title: "Identidade", description: "Marca e página pública" },
-  { step: 3, title: "Funcionamento", description: "Dias e horários" },
-  { step: 4, title: "Serviço", description: "O que você oferece" },
-  { step: 5, title: "Profissional", description: "Quem atende" },
-] as const
+export const SLOT_INTERVALS = [10, 15, 20, 30, 60]
+
+export const MIN_ADVANCE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Sem antecedência" },
+  { value: 30, label: "30 minutos" },
+  { value: 60, label: "1 hora" },
+  { value: 120, label: "2 horas" },
+  { value: 240, label: "4 horas" },
+  { value: 720, label: "12 horas" },
+  { value: 1440, label: "1 dia" },
+  { value: 2880, label: "2 dias" },
+]
 
 export const WEEKDAY_LABELS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"]

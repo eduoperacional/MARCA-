@@ -29,9 +29,7 @@ async function DashboardShell({ children }: { children: React.ReactNode }) {
     business: { id: access.business.id, name: access.business.displayName || access.business.name, slug: access.business.slug },
     role: access.role,
     permissions: [...access.permissions],
-    memberships: memberships
-      .filter((m) => m.business.onboardingCompletedAt || m.member.role !== "owner")
-      .map((m) => ({ id: m.business.id, name: m.business.displayName || m.business.name, role: m.member.role })),
+    memberships: memberships.map((m) => ({ id: m.business.id, name: m.business.displayName || m.business.name, role: m.member.role })),
   }
 
   const suspension = await getSuspension(db, access.business.id).catch(() => null)

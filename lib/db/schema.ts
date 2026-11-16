@@ -40,6 +40,17 @@ export const businesses = pgTable("businesses", {
   createdAt: createdAt(),
 })
 
+/** Progresso da configuração inicial (script 014). */
+export const businessOnboarding = pgTable("business_onboarding", {
+  businessId: uuid("business_id").primaryKey(),
+  mode: text("mode").$type<"guided" | "manual">().notNull().default("guided"),
+  reviewedSteps: text("reviewed_steps").array().notNull(),
+  dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+  readyAt: timestamp("ready_at", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const professionals = pgTable("professionals", {
   id: uuid("id").primaryKey().defaultRandom(),
   businessId: uuid("business_id").notNull(),

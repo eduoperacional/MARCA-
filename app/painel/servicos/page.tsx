@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 
+import { HelpHint } from "@/components/help/help-hint"
 import { ServicesView } from "@/components/services/services-view"
 import { getCurrentBusiness } from "@/lib/business"
 import { firstParam } from "@/lib/period"
@@ -11,5 +12,12 @@ export default async function ServicesPage({ searchParams }: PageProps<"/painel/
   const params = await searchParams
   const business = await getCurrentBusiness()
   const [services, professionals] = await Promise.all([listServices(business.id), listProfessionals(business.id)])
-  return <ServicesView services={services} professionals={professionals} openCreate={firstParam(params.novo) === "1"} />
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex justify-end">
+        <HelpHint topic="services" />
+      </div>
+      <ServicesView services={services} professionals={professionals} openCreate={firstParam(params.novo) === "1"} />
+    </div>
+  )
 }

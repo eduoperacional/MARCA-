@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { and, count, eq, gte } from "drizzle-orm"
 
 import { BookingPageAdmin } from "@/components/booking/booking-page-admin"
+import { HelpHint } from "@/components/help/help-hint"
 import { getCurrentBusiness } from "@/lib/business"
 import { db } from "@/lib/db"
 import { appointments } from "@/lib/db/schema"
@@ -26,7 +27,11 @@ export default async function BookingPageAdminPage() {
   const onlineRecent = recent.filter((a) => a.source === "online").slice(0, 8)
 
   return (
-    <BookingPageAdmin
+    <div className="flex flex-col gap-4">
+      <div className="flex justify-end">
+        <HelpHint topic="page" />
+      </div>
+      <BookingPageAdmin
       slug={business.slug}
       businessName={business.name}
       settings={{
@@ -36,6 +41,7 @@ export default async function BookingPageAdminPage() {
       }}
       onlineLast30={stats?.total ?? 0}
       recent={onlineRecent}
-    />
+      />
+    </div>
   )
 }

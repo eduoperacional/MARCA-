@@ -1,22 +1,22 @@
 "use server"
 
-import { and, eq, isNull } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
-import { cleanText, fail, isUuid, toCents } from "@/lib/actions/result"
-import { getSession, setActiveBusiness } from "@/lib/business"
+import { cleanText, fail, isUuid } from "@/lib/actions/result"
+import { getAccess, getSession, setActiveBusiness } from "@/lib/business"
 import { db } from "@/lib/db"
-import { businesses, businessMembers, professionals, professionalServices, services } from "@/lib/db/schema"
-import { BUSINESS_SEGMENTS } from "@/lib/onboarding"
+import { businesses, businessMembers, professionals } from "@/lib/db/schema"
+import { BUSINESS_SEGMENTS, MIN_ADVANCE_OPTIONS, SLOT_INTERVALS } from "@/lib/onboarding"
 import { DEFAULT_PERMISSIONS } from "@/lib/permissions"
 import { clientIp, rateLimit, RATE_LIMITED } from "@/lib/rate-limit"
 import { normalizeWeekSchedule, validateWeekSchedule } from "@/lib/schedule"
+import { recordSetupChange, type SetupMode } from "@/lib/setup-state"
 import { isValidSlug, slugify } from "@/lib/slug"
 import { isSlugAvailable, uniqueSlugFrom } from "@/lib/slug-server"
 import type { DaySchedule } from "@/lib/types"
 
-type Result = { ok: true } | { ok: false; error: string }
-const ok = (): Result => ({ ok: true })
+type Result = { ok: true; ready?: boolean } | { ok: false; error: string }
 
 const DEFAULT_HOURS: DaySchedule[] = Array.from({ length: 7 }, (_, weekday) => ({
   weekday,
@@ -45,37 +45,22 @@ function cleanImage(value: unknown) {
   return { error: "Imagem inválida." }
 }
 
-/** Estabelecimento em configuração do usuário logado (somente o proprietário). */
-async function ownedDraft(userId: string) {
-  const [row] = await db
-    .select({ business: businesses })
-    .from(businessMembers)
-    .innerJoin(businesses, eq(businesses.id, businessMembers.businessId))
-    .where(
-      and(
-        eq(businessMembers.userId, userId),
-        eq(businessMembers.role, "owner"),
-        eq(businessMembers.active, true),
-        isNull(businesses.onboardingCompletedAt)
-      )
-    )
-    .limit(1)
-  return row?.business ?? null
+/** Estabelecimento ativo, somente quando o usuário é o proprietário. Nunca acessa outro tenant. */
+async function requireOwner() {
+  const access = await getAccess()
+  if (!access) return { error: "Sessão expirada. Entre novamente." }
+  if (access.role !== "owner") return { error: "Somente o proprietário pode alterar a configuração inicial." }
+  if (!(await rateLimit(`onboarding:${access.user.id}`, 60, 60))) return { error: RATE_LIMITED }
+  return { access }
 }
 
-async function requireDraft() {
-  const session = await getSession()
-  if (!session?.user) return { error: "Sessão expirada. Entre novamente." as const }
-  const business = await ownedDraft(session.user.id)
-  if (!business) return { error: "Nenhum estabelecimento em configuração." as const }
-  return { session, business }
+async function finish(businessId: string, reviewed: NonNullable<Parameters<typeof recordSetupChange>[2]>["reviewed"]): Promise<Result> {
+  const state = await recordSetupChange(db, businessId, { reviewed })
+  revalidatePath("/", "layout")
+  return { ok: true, ready: state?.progress.ready ?? false }
 }
 
-async function advance(businessId: string, step: number, current: number) {
-  if (step > current) {
-    await db.update(businesses).set({ onboardingStep: step }).where(eq(businesses.id, businessId))
-  }
-}
+/* --------------------------- Etapa 1: estabelecimento --------------------------- */
 
 export interface BusinessStepInput {
   name: string
@@ -84,33 +69,53 @@ export interface BusinessStepInput {
   address: string
   city: string
   state: string
+  displayName: string
+  primaryColor: string
+  logoUrl: string | null
+  /** Cria um novo estabelecimento em vez de editar o ativo (fluxo "novo estabelecimento"). */
+  createNew: boolean
+  mode: SetupMode
 }
 
 export async function saveBusinessStep(input: BusinessStepInput): Promise<Result> {
   const session = await getSession()
   if (!session?.user) return fail("Sessão expirada. Entre novamente.")
-  if (!(await rateLimit(`onboarding:${session.user.id}`, 30, 60))) return fail(RATE_LIMITED)
+  if (!(await rateLimit(`onboarding:${session.user.id}`, 60, 60))) return fail(RATE_LIMITED)
 
   const name = cleanText(input.name, 80)
   if (!name || name.length < 2) return fail("Informe o nome comercial.")
   if (!BUSINESS_SEGMENTS.some((s) => s.value === input.segment)) return fail("Selecione o tipo de negócio.")
   const phone = cleanText(input.phone, 30)
-  if (!phone || !isValidPhone(phone)) return fail("Informe um telefone ou WhatsApp válido.")
+  if (!phone || !isValidPhone(phone)) return fail("Informe um telefone ou WhatsApp válido, com DDD.")
   const address = cleanText(input.address, 200)
   if (!address) return fail("Informe o endereço.")
   const city = cleanText(input.city, 80)
   if (!city) return fail("Informe a cidade.")
   const state = String(input.state ?? "").toUpperCase()
   if (!UF.has(state)) return fail("Selecione o estado.")
+  const displayName = cleanText(input.displayName, 80) ?? name
+  if (!/^#[0-9a-f]{6}$/i.test(input.primaryColor ?? "")) return fail("Cor principal inválida.")
+  const logo = cleanImage(input.logoUrl)
+  if (logo.error) return fail(logo.error)
+  const mode: SetupMode = input.mode === "manual" ? "manual" : "guided"
 
-  const values = { name, segment: input.segment, phone, address, city, state }
-  const draft = await ownedDraft(session.user.id)
+  const values = {
+    name,
+    segment: input.segment,
+    phone,
+    address,
+    city,
+    state,
+    displayName,
+    primaryColor: input.primaryColor.toUpperCase(),
+    logoUrl: logo.value,
+  }
 
-  if (draft) {
-    await db.update(businesses).set(values).where(eq(businesses.id, draft.id))
-    await advance(draft.id, 2, draft.onboardingStep)
-    revalidatePath("/onboarding")
-    return ok()
+  const access = input.createNew ? null : await getAccess()
+  if (access) {
+    if (access.role !== "owner") return fail("Somente o proprietário pode alterar estes dados.")
+    await db.update(businesses).set(values).where(eq(businesses.id, access.business.id))
+    return finish(access.business.id, ["business"])
   }
 
   if (!(await rateLimit(`create-business:${session.user.id}`, 5, 60 * 60 * 24))) return fail(RATE_LIMITED)
@@ -118,14 +123,7 @@ export async function saveBusinessStep(input: BusinessStepInput): Promise<Result
   const businessId = await db.transaction(async (tx) => {
     const [business] = await tx
       .insert(businesses)
-      .values({
-        ...values,
-        slug,
-        displayName: name,
-        openingHours: DEFAULT_HOURS,
-        ownerUserId: session.user.id,
-        onboardingStep: 2,
-      })
+      .values({ ...values, slug, openingHours: DEFAULT_HOURS, ownerUserId: session.user.id, onboardingStep: 2 })
       .returning({ id: businesses.id })
     await tx.insert(businessMembers).values({
       businessId: business.id,
@@ -136,33 +134,77 @@ export async function saveBusinessStep(input: BusinessStepInput): Promise<Result
     return business.id
   })
   await setActiveBusiness(businessId)
-  revalidatePath("/onboarding")
-  return ok()
+  await recordSetupChange(db, businessId, { reviewed: ["business"], mode })
+  revalidatePath("/", "layout")
+  return { ok: true, ready: false }
 }
 
-export interface IdentityStepInput {
-  displayName: string
-  description: string
+/* ---------------------------- Etapa 2: funcionamento ---------------------------- */
+
+export async function saveHoursStep(input: { openingHours: DaySchedule[] }): Promise<Result> {
+  const ctx = await requireOwner()
+  if (!ctx.access) return fail(ctx.error!)
+  const error = validateWeekSchedule(input.openingHours)
+  if (error) return fail(error)
+  await db
+    .update(businesses)
+    .set({ openingHours: normalizeWeekSchedule(input.openingHours) })
+    .where(eq(businesses.id, ctx.access.business.id))
+  return finish(ctx.access.business.id, ["hours"])
+}
+
+/* --------------------------- Etapa 4: "eu também atendo" -------------------------- */
+
+/** Vincula o proprietário ao profissional cadastrado, para que ele veja a própria agenda. */
+export async function linkSelfAsProfessional(professionalId: string): Promise<Result> {
+  if (!isUuid(professionalId)) return fail("Profissional inválido.")
+  const ctx = await requireOwner()
+  if (!ctx.access) return fail(ctx.error!)
+  const { access } = ctx
+  const [owned] = await db
+    .select({ id: professionals.id })
+    .from(professionals)
+    .where(and(eq(professionals.id, professionalId), eq(professionals.businessId, access.business.id)))
+    .limit(1)
+  if (!owned) return fail("Profissional não encontrado.")
+  await db
+    .update(businessMembers)
+    .set({ professionalId })
+    .where(and(eq(businessMembers.id, access.memberId), eq(businessMembers.businessId, access.business.id)))
+  revalidatePath("/", "layout")
+  return { ok: true }
+}
+
+/* ------------------------------ Etapa 5: regras ------------------------------ */
+
+export async function saveRulesStep(input: { slotIntervalMin: number; minAdvanceMin: number }): Promise<Result> {
+  const ctx = await requireOwner()
+  if (!ctx.access) return fail(ctx.error!)
+  if (!SLOT_INTERVALS.includes(input.slotIntervalMin)) return fail("Intervalo de horários inválido.")
+  if (!MIN_ADVANCE_OPTIONS.some((o) => o.value === input.minAdvanceMin)) return fail("Antecedência mínima inválida.")
+  await db
+    .update(businesses)
+    .set({ slotIntervalMin: input.slotIntervalMin, minAdvanceMin: input.minAdvanceMin })
+    .where(eq(businesses.id, ctx.access.business.id))
+  return finish(ctx.access.business.id, ["rules"])
+}
+
+/* --------------------------- Etapa 6: página pública --------------------------- */
+
+export interface PageStepInput {
   slug: string
-  primaryColor: string
-  logoUrl: string | null
+  description: string
   coverUrl: string | null
+  onlineBookingEnabled: boolean
 }
 
-export async function saveIdentityStep(input: IdentityStepInput): Promise<Result> {
-  const ctx = await requireDraft()
-  if ("error" in ctx) return fail(ctx.error!)
-  const { business } = ctx
-
-  const displayName = cleanText(input.displayName, 80)
-  if (!displayName) return fail("Informe o nome de exibição.")
-  const description = cleanText(input.description, 500)
-  if (!/^#[0-9a-f]{6}$/i.test(input.primaryColor)) return fail("Cor principal inválida.")
+export async function savePageStep(input: PageStepInput): Promise<Result> {
+  const ctx = await requireOwner()
+  if (!ctx.access) return fail(ctx.error!)
+  const business = ctx.access.business
   const slug = slugify(input.slug ?? "")
-  if (!isValidSlug(slug)) return fail("Endereço público inválido. Use letras, números e hífens (3 a 48 caracteres).")
-  if (!(await isSlugAvailable(slug, business.id))) return fail("Este endereço público já está em uso. Escolha outro.")
-  const logo = cleanImage(input.logoUrl)
-  if (logo.error) return fail(logo.error)
+  if (!isValidSlug(slug)) return fail("Endereço inválido. Use letras, números e hífens (3 a 48 caracteres).")
+  if (!(await isSlugAvailable(slug, business.id))) return fail("Este endereço já está em uso. Escolha outro.")
   const cover = cleanImage(input.coverUrl)
   if (cover.error) return fail(cover.error)
 
@@ -170,23 +212,17 @@ export async function saveIdentityStep(input: IdentityStepInput): Promise<Result
     await db
       .update(businesses)
       .set({
-        displayName,
-        description,
         slug,
-        primaryColor: input.primaryColor.toUpperCase(),
-        logoUrl: logo.value,
+        description: cleanText(input.description, 500),
         coverUrl: cover.value,
+        onlineBookingEnabled: Boolean(input.onlineBookingEnabled),
       })
       .where(eq(businesses.id, business.id))
   } catch (error) {
-    if ((error as { code?: string; cause?: { code?: string } })?.cause?.code === "23505") {
-      return fail("Este endereço público já está em uso. Escolha outro.")
-    }
+    if ((error as { cause?: { code?: string } })?.cause?.code === "23505") return fail("Este endereço já está em uso. Escolha outro.")
     throw error
   }
-  await advance(business.id, 3, business.onboardingStep)
-  revalidatePath("/onboarding")
-  return ok()
+  return finish(business.id, ["page"])
 }
 
 export async function checkSlugAvailability(slug: string) {
@@ -195,138 +231,27 @@ export async function checkSlugAvailability(slug: string) {
   if (!(await rateLimit(`slug-check:${await clientIp()}`, 60, 60))) return { available: false, reason: RATE_LIMITED }
   const normalized = slugify(slug ?? "")
   if (!isValidSlug(normalized)) return { available: false, reason: "Use letras, números e hífens (3 a 48 caracteres)." }
-  const draft = await ownedDraft(session.user.id)
-  const available = await isSlugAvailable(normalized, draft?.id)
+  const access = await getAccess()
+  const available = await isSlugAvailable(normalized, access?.role === "owner" ? access.business.id : undefined)
   return { available, reason: available ? null : "Endereço indisponível." }
 }
 
-export interface HoursStepInput {
-  openingHours: DaySchedule[]
-  slotIntervalMin: number
-  minAdvanceMin: number
-  onlineBookingEnabled: boolean
+/* ------------------------------ Preferências ------------------------------ */
+
+export async function setSetupMode(mode: SetupMode): Promise<Result> {
+  const ctx = await requireOwner()
+  if (!ctx.access) return fail(ctx.error!)
+  const state = await recordSetupChange(db, ctx.access.business.id, { mode: mode === "manual" ? "manual" : "guided" })
+  if (state && !state.available) return fail("Progresso indisponível no momento. Tente novamente mais tarde.")
+  revalidatePath("/painel")
+  return { ok: true }
 }
 
-export async function saveHoursStep(input: HoursStepInput): Promise<Result> {
-  const ctx = await requireDraft()
-  if ("error" in ctx) return fail(ctx.error!)
-  const error = validateWeekSchedule(input.openingHours)
-  if (error) return fail(error)
-  if (![10, 15, 20, 30, 60].includes(input.slotIntervalMin)) return fail("Intervalo de horários inválido.")
-  if (![0, 30, 60, 120, 240, 1440].includes(input.minAdvanceMin)) return fail("Antecedência mínima inválida.")
-
-  await db
-    .update(businesses)
-    .set({
-      openingHours: normalizeWeekSchedule(input.openingHours),
-      slotIntervalMin: input.slotIntervalMin,
-      minAdvanceMin: input.minAdvanceMin,
-      onlineBookingEnabled: Boolean(input.onlineBookingEnabled),
-    })
-    .where(eq(businesses.id, ctx.business.id))
-  await advance(ctx.business.id, 4, ctx.business.onboardingStep)
-  revalidatePath("/onboarding")
-  return ok()
-}
-
-export interface ServiceStepInput {
-  name: string
-  category: string
-  price: string
-  durationMin: number
-}
-
-export async function saveServiceStep(input: ServiceStepInput): Promise<Result> {
-  const ctx = await requireDraft()
-  if ("error" in ctx) return fail(ctx.error!)
-  const name = cleanText(input.name, 100)
-  if (!name) return fail("Informe o nome do serviço.")
-  const category = cleanText(input.category, 60) ?? "Geral"
-  const priceCents = toCents(input.price)
-  if (priceCents === null) return fail("Informe um preço válido.")
-  if (!Number.isInteger(input.durationMin) || input.durationMin < 5 || input.durationMin > 600) {
-    return fail("Informe uma duração entre 5 e 600 minutos.")
-  }
-
-  const [existing] = await db
-    .select({ id: services.id })
-    .from(services)
-    .where(eq(services.businessId, ctx.business.id))
-    .limit(1)
-  const values = { name, category, priceCents, durationMin: input.durationMin, active: true }
-  if (existing) {
-    await db.update(services).set(values).where(and(eq(services.id, existing.id), eq(services.businessId, ctx.business.id)))
-  } else {
-    await db.insert(services).values({ ...values, businessId: ctx.business.id })
-  }
-  await advance(ctx.business.id, 5, ctx.business.onboardingStep)
-  revalidatePath("/onboarding")
-  return ok()
-}
-
-export interface ProfessionalStepInput {
-  mode: "self" | "other"
-  name: string
-  phone: string
-  email: string
-  serviceIds: string[]
-}
-
-export async function completeProfessionalStep(input: ProfessionalStepInput): Promise<Result> {
-  const ctx = await requireDraft()
-  if ("error" in ctx) return fail(ctx.error!)
-  const { session, business } = ctx
-
-  const isSelf = input.mode === "self"
-  const name = isSelf ? cleanText(session.user.name, 120) : cleanText(input.name, 120)
-  if (!name) return fail("Informe o nome do profissional.")
-  const phone = isSelf ? cleanText((session.user as { phone?: string | null }).phone, 30) : cleanText(input.phone, 30)
-  if (!isSelf && phone && !isValidPhone(phone)) return fail("Telefone inválido.")
-  const email = isSelf ? session.user.email : cleanText(input.email, 160)
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return fail("E-mail inválido.")
-
-  const ownedServices = await db
-    .select({ id: services.id })
-    .from(services)
-    .where(eq(services.businessId, business.id))
-  const allowed = new Set(ownedServices.map((s) => s.id))
-  const serviceIds = input.serviceIds.filter((id) => isUuid(id) && allowed.has(id))
-  if (!serviceIds.length) return fail("Selecione ao menos um serviço realizado pelo profissional.")
-
-  await db.transaction(async (tx) => {
-    const [professional] = await tx
-      .insert(professionals)
-      .values({
-        businessId: business.id,
-        name,
-        phone,
-        email,
-        color: business.primaryColor,
-        workSchedule: business.openingHours,
-        active: true,
-      })
-      .returning({ id: professionals.id })
-    await tx.insert(professionalServices).values(serviceIds.map((serviceId) => ({ professionalId: professional.id, serviceId })))
-    if (isSelf) {
-      await tx
-        .update(businessMembers)
-        .set({ professionalId: professional.id })
-        .where(and(eq(businessMembers.businessId, business.id), eq(businessMembers.userId, session.user.id)))
-    }
-    await tx
-      .update(businesses)
-      .set({ onboardingStep: 6, onboardingCompletedAt: new Date() })
-      .where(eq(businesses.id, business.id))
-  })
-  await setActiveBusiness(business.id)
+export async function setChecklistDismissed(dismissed: boolean): Promise<Result> {
+  const ctx = await requireOwner()
+  if (!ctx.access) return fail(ctx.error!)
+  const state = await recordSetupChange(db, ctx.access.business.id, { dismissed: Boolean(dismissed) })
+  if (!state?.available) return fail("Não foi possível salvar a preferência. Tente novamente mais tarde.")
   revalidatePath("/painel", "layout")
-  return ok()
-}
-
-/** Permite voltar para uma etapa anterior já concluída. */
-export async function goToOnboardingStep(step: number): Promise<Result> {
-  const ctx = await requireDraft()
-  if ("error" in ctx) return fail(ctx.error!)
-  if (!Number.isInteger(step) || step < 1 || step > ctx.business.onboardingStep) return fail("Etapa inválida.")
-  return ok()
+  return { ok: true }
 }
