@@ -16,18 +16,20 @@ export function HelpHint({ topic, label = "Como preencher?" }: { topic: HelpTopi
         <CircleHelp className="size-4" aria-hidden />
         {label}
       </PopoverTrigger>
-      <PopoverContent align="end" className="flex w-80 flex-col gap-3 text-sm">
+      <PopoverContent align="end" className="flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-3 text-sm">
         <p className="font-medium">{t.title}</p>
         <p className="leading-relaxed text-muted-foreground">{t.intro}</p>
-        <ul className="flex list-disc flex-col gap-1.5 pl-4 leading-relaxed">
+        <ol className="flex list-decimal flex-col gap-1.5 pl-4 leading-relaxed">
           {t.howTo.map((tip) => (
             <li key={tip}>{tip}</li>
           ))}
-        </ul>
-        <p className="rounded-md bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-          <span className="font-medium text-foreground">Exemplo: </span>
-          {t.example}
-        </p>
+        </ol>
+        {t.example && (
+          <p className="rounded-md bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+            <span className="font-medium text-foreground">Exemplo: </span>
+            {t.example}
+          </p>
+        )}
         <Link href={`/painel/ajuda#${t.key}`} className="text-xs font-medium text-brand-light underline-offset-4 hover:underline">
           Ver na Central de Ajuda
         </Link>

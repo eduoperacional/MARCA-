@@ -110,7 +110,7 @@ export function SetupWizard({ step, steps, percent, business, services, professi
           </p>
           <h1 className="font-heading text-2xl font-semibold text-balance">{current.title}</h1>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            {current.description} O progresso é salvo a cada etapa; você pode sair e continuar depois.
+            {current.description} Tudo fica salvo.
           </p>
         </header>
         <FormAlert message={error} />
