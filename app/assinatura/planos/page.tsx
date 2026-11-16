@@ -6,7 +6,7 @@ import { PLAN_FEATURES, PLAN_LIMITS } from "@/lib/admin/labels"
 import { TRIAL_DAYS, businessTrialEnd } from "@/lib/billing/access"
 import { enabledBillingTypes, isAsaasConfigured } from "@/lib/billing/asaas"
 import { listPublicPlans } from "@/lib/billing/self-service"
-import { getCurrentSubscription, hasHadSubscription } from "@/lib/billing/subscriptions"
+import { getCurrentSubscription, hasHadSubscription, isContracted } from "@/lib/billing/subscriptions"
 import { requireAccess } from "@/lib/business"
 import { db } from "@/lib/db"
 import { formatDate } from "@/lib/format"
@@ -38,7 +38,7 @@ export default async function PlansPage() {
     }),
   }))
 
-  const mode = sub?.gatewaySubscriptionId ? "change" : "checkout"
+  const mode = sub && isContracted(sub) ? "change" : "checkout"
   const trialEnd = businessTrialEnd(access.business)
   const trialNote =
     !hadSub && trialEnd > new Date()

@@ -13,7 +13,10 @@ import {
   brazilDate,
   cancelOwnSubscription,
   changeOwnPlan,
+  GATEWAY_ACTIVATION_LEASE_MS,
   listPublicPlans,
+  processGatewayActivations,
+  runBillingCron,
   startCheckout,
   type CheckoutGateway,
 } from "@/lib/billing/self-service"
@@ -57,10 +60,30 @@ CREATE TABLE notifications (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), busin
 type Call = { op: string; args: unknown[] }
 
 /** Gateway falso: registra as chamadas e nunca acessa a rede do Asaas. */
-function fakeGateway(opts: { failCancel?: boolean } = {}) {
+function fakeGateway(
+  opts: {
+    failCancel?: boolean
+    /** Quantas chamadas de createSubscription falham (erro de rede) antes de funcionar. */
+    failCreateTimes?: number
+    /** Cria no Asaas mas a resposta se perde (timeout) nas primeiras N chamadas. */
+    loseCreateResponseTimes?: number
+    /** Erro de validação (4xx), que não deve ser repetido na mesma execução. */
+    rejectCreate?: boolean
+    /** Atraso de createSubscription, para provocar concorrência. */
+    createDelayMs?: number
+  } = {}
+) {
   const calls: Call[] = []
   let n = 0
+  let createFailures = opts.failCreateTimes ?? 0
+  let lostResponses = opts.loseCreateResponseTimes ?? 0
+  const byReference = new Map<string, string>()
   const gateway: CheckoutGateway = {
+    async findSubscriptionByReference(...args) {
+      calls.push({ op: "findSubscriptionByReference", args })
+      const id = byReference.get(args[0])
+      return id ? { id } : null
+    },
     async findCustomerByReference(...args) {
       calls.push({ op: "findCustomerByReference", args })
       return null
@@ -75,7 +98,19 @@ function fakeGateway(opts: { failCancel?: boolean } = {}) {
     },
     async createSubscription(...args) {
       calls.push({ op: "createSubscription", args })
-      return { id: `sub_${++n}_${crypto.randomUUID().slice(0, 8)}` }
+      if (opts.createDelayMs) await new Promise((r) => setTimeout(r, opts.createDelayMs))
+      if (opts.rejectCreate) throw Object.assign(new Error("Asaas 400: cliente inválido"), { status: 400 })
+      if (createFailures > 0) {
+        createFailures--
+        throw new Error("fetch failed")
+      }
+      const id = `sub_${++n}_${crypto.randomUUID().slice(0, 8)}`
+      if (args[0].externalReference) byReference.set(args[0].externalReference, id)
+      if (lostResponses > 0) {
+        lostResponses--
+        throw new Error("The operation was aborted due to timeout")
+      }
+      return { id }
     },
     async updateSubscription(...args) {
       calls.push({ op: "updateSubscription", args })
@@ -160,18 +195,35 @@ function paymentEvent(event: string, sub: { id: string; gatewaySubscriptionId: s
   }
 }
 
-async function checkout(createdAt = new Date()) {
+/** Contrata sem avançar o tempo: durante o trial nada é criado no Asaas. */
+async function trialCheckout(createdAt = new Date(), planId?: string, billingType: "PIX" | "BOLETO" | "CREDIT_CARD" = "PIX") {
   const business = await newBusiness(createdAt)
-  const plan = await anyPlan()
+  const plan = planId ? (await db.select().from(schema.plans).where(eq(schema.plans.id, planId)))[0] : await anyPlan()
   const { gateway, calls } = fakeGateway()
   const result = await startCheckout(db, gateway, {
     business,
     user: { id: "u1", email: "dono@teste.com" },
     planId: plan.id,
-    billingType: "PIX",
+    billingType,
     cpfCnpj: "12345678909",
   })
   return { business, plan, gateway, calls, result }
+}
+
+/** Chamadas ao Asaas referentes a uma assinatura local específica. */
+function callsFor(calls: Call[], subId: string, op = "createSubscription") {
+  return calls.filter((c) => c.op === op && (c.args[0] as { externalReference?: string })?.externalReference === subId)
+}
+
+/** Contrata e, se estiver no trial, executa o cron no último instante do trial (assinatura criada no Asaas). */
+async function checkout(createdAt = new Date()) {
+  const ctx = await trialCheckout(createdAt)
+  let subscription = ctx.result.subscription
+  if (subscription.gatewayActivationStatus === "pending") {
+    await processGatewayActivations(db, ctx.gateway, subscription.trialEndsAt!, { retryDelayMs: 0 })
+    subscription = await getSub(subscription.id)
+  }
+  return { ...ctx, result: { ...ctx.result, subscription } }
 }
 
 describe("migrations", () => {
@@ -200,27 +252,38 @@ describe("migrations", () => {
 })
 
 describe("checkout", () => {
-  test("cria cliente e assinatura no Asaas com valor, ciclo e referência corretos", async () => {
-    const { business, plan, calls, result } = await checkout()
+  test("no trial: cria só o cliente no Asaas e registra plano, valor e forma de pagamento escolhidos", async () => {
+    const { business, plan, calls, result } = await trialCheckout()
     const customer = calls.find((c) => c.op === "createCustomer")!.args[0] as Record<string, unknown>
     assert.equal(customer.externalReference, business.id)
     assert.equal(customer.cpfCnpj, "12345678909")
 
-    const created = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
-    assert.equal(created.value, plan.priceCents / 100)
-    assert.equal(created.cycle, plan.billingInterval === "year" ? "YEARLY" : "MONTHLY")
-    assert.equal(created.externalReference, result.subscription.id)
-    assert.equal(created.billingType, "PIX")
+    assert.equal(calls.filter((c) => c.op === "createSubscription").length, 0, "nenhuma assinatura/cobrança no Asaas")
+    assert.equal(calls.filter((c) => c.op === "listSubscriptionPayments").length, 0)
+    assert.equal(result.pendingTransactionId, null, "nenhum Pix/boleto para pagar")
 
     const sub = await getSub(result.subscription.id)
     assert.equal(sub.businessId, business.id)
     assert.equal(sub.planId, plan.id)
     assert.equal(sub.priceCents, plan.priceCents)
     assert.equal(sub.billingInterval, plan.billingInterval)
+    assert.equal(sub.gatewayBillingType, "PIX")
     assert.match(sub.gatewayCustomerId ?? "", /^cus_1_/)
-    assert.ok(sub.gatewaySubscriptionId)
+    assert.equal(sub.gatewaySubscriptionId, null)
+    assert.equal(sub.gatewayActivationStatus, "pending")
     assert.equal(sub.status, "trialing")
-    assert.ok(result.pendingTransactionId, "cobrança em aberto registrada como pendente")
+    assert.equal(sub.trialEndsAt!.getTime(), businessTrialEnd(business).getTime())
+  })
+
+  test("após o trial: contratação cria a assinatura no Asaas na hora (sem novo trial)", async () => {
+    const { plan, calls, result } = await trialCheckout(new Date(Date.now() - 10 * DAY))
+    const created = callsFor(calls, result.subscription.id)
+    assert.equal(created.length, 1)
+    const input = created[0].args[0] as Record<string, unknown>
+    assert.equal(input.value, plan.priceCents / 100)
+    assert.equal(input.nextDueDate, brazilDate(new Date()))
+    assert.ok(result.subscription.gatewaySubscriptionId)
+    assert.ok(result.pendingTransactionId)
   })
 
   test("bloqueia segunda contratação para o mesmo estabelecimento", async () => {
@@ -231,8 +294,8 @@ describe("checkout", () => {
     )
   })
 
-  test("falha no Asaas desfaz a assinatura local", async () => {
-    const business = await newBusiness()
+  test("após o trial: falha no Asaas desfaz a assinatura local", async () => {
+    const business = await newBusiness(new Date(Date.now() - 10 * DAY))
     const plan = await anyPlan()
     const { gateway } = fakeGateway()
     gateway.createSubscription = async () => {
@@ -324,7 +387,7 @@ describe("webhook: eventos de pagamento", () => {
   })
 
   test("evento que chega antes do vínculo é reprocessado ao vincular", async () => {
-    const business = await newBusiness()
+    const business = await newBusiness(new Date(Date.now() - 10 * DAY))
     const plan = await anyPlan()
     const { gateway } = fakeGateway()
     const original = gateway.createSubscription
@@ -653,7 +716,13 @@ describe("regra comercial: 7 dias grátis", () => {
       cpfCnpj: "12345678909",
       now: opts.now,
     })
-    const created = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
+    const subId = result.subscription.id
+    if (result.subscription.gatewayActivationStatus === "pending") {
+      assert.equal(callsFor(calls, subId).length, 0, "nada é criado no Asaas durante o trial")
+      // Cron executado exatamente no fim do trial.
+      await processGatewayActivations(db, gateway, result.subscription.trialEndsAt!, { retryDelayMs: 0 })
+    }
+    const created = callsFor(calls, subId)[0].args[0] as Record<string, unknown>
     return { business, gateway, calls, created, result }
   }
 
@@ -777,13 +846,13 @@ describe("primeira cobrança após o trial", () => {
     assert.equal(rows[0].status, "approved")
   })
 
-  test("sem duplicidade: rotina diária no fim do trial não cria assinatura nem cobrança no Asaas", async () => {
-    const sub = await trialSub()
-    const { gateway, calls } = fakeGateway()
-    await runBillingMaintenance(db, new Date(), gateway)
-    await runBillingMaintenance(db, new Date(), gateway)
-    assert.equal(calls.filter((c) => c.op === "createSubscription").length, 0)
-    assert.equal((await getSub(sub.id)).status, "trialing")
+  test("sem duplicidade: cron repetido depois da ativação não cria outra assinatura", async () => {
+    const { gateway, calls, result } = await checkout()
+    const sub = result.subscription
+    const later = new Date(sub.trialEndsAt!.getTime() + DAY)
+    await runBillingCron(db, later, gateway)
+    await runBillingCron(db, new Date(later.getTime() + DAY), gateway)
+    assert.equal(callsFor(calls, sub.id).length, 1)
   })
 
   test("sem duplicidade: segunda contratação simultânea do mesmo estabelecimento é recusada", async () => {
@@ -793,7 +862,172 @@ describe("primeira cobrança após o trial", () => {
     const input = { business, user: { id: "u1", email: "a@a.com" }, planId: plan.id, billingType: "PIX" as const, cpfCnpj: "12345678909" }
     const results = await Promise.allSettled([startCheckout(db, gateway, input), startCheckout(db, gateway, input)])
     assert.equal(results.filter((r) => r.status === "fulfilled").length, 1)
-    assert.equal(calls.filter((c) => c.op === "createSubscription").length, 1)
+    assert.equal(calls.filter((c) => c.op === "createSubscription").length, 0)
+    const rows = await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.businessId, business.id))
+    assert.equal(rows.length, 1)
+  })
+})
+
+describe("cobrança criada pelo cron no fim do trial", () => {
+  async function txs(subId: string) {
+    return db.select().from(schema.billingTransactions).where(eq(schema.billingTransactions.subscriptionId, subId))
+  }
+
+  test("nenhuma cobrança é criada durante os 7 dias, mesmo com o cron rodando todo dia", async () => {
+    const { business, gateway, calls, result } = await trialCheckout()
+    const sub = result.subscription
+    for (let day = 0; day < 7; day++) {
+      const at = new Date(sub.trialEndsAt!.getTime() - (7 - day) * DAY + 60_000)
+      await runBillingCron(db, at, gateway)
+      const row = await getSub(sub.id)
+      assert.equal(row.gatewaySubscriptionId, null, `dia ${day + 1}`)
+      assert.equal(computeBillingAccess(business, row, at, 7).allowed, true)
+    }
+    assert.equal(callsFor(calls, sub.id).length, 0)
+    assert.equal((await txs(sub.id)).length, 0)
+    // Um instante antes do fim ainda não cria.
+    await processGatewayActivations(db, gateway, new Date(sub.trialEndsAt!.getTime() - 1), { retryDelayMs: 0 })
+    assert.equal(callsFor(calls, sub.id).length, 0)
+  })
+
+  test("no término cria a assinatura com o valor, a periodicidade e a forma de pagamento escolhidos", async () => {
+    const yearly = (await listPublicPlans(db)).find((p) => p.billingInterval === "year")!
+    const { gateway, calls, result } = await trialCheckout(new Date(), yearly.id, "BOLETO")
+    const sub = result.subscription
+    const summary = await processGatewayActivations(db, gateway, sub.trialEndsAt!, { retryDelayMs: 0 })
+    assert.ok(summary.activated >= 1)
+
+    const created = callsFor(calls, sub.id)
+    assert.equal(created.length, 1)
+    const input = created[0].args[0] as Record<string, unknown>
+    assert.equal(input.value, yearly.priceCents / 100)
+    assert.equal(input.cycle, "YEARLY")
+    assert.equal(input.billingType, "BOLETO")
+    assert.equal(input.customer, sub.gatewayCustomerId)
+    assert.equal(input.nextDueDate, brazilDate(sub.trialEndsAt!))
+
+    const row = await getSub(sub.id)
+    assert.ok(row.gatewaySubscriptionId)
+    assert.equal(row.gatewayActivationStatus, "done")
+    assert.ok(row.gatewayActivatedAt)
+    assert.equal(row.status, "trialing", "aguarda o pagamento da primeira cobrança")
+    assert.equal((await txs(sub.id)).filter((t) => t.status === "pending").length, 1, "primeira cobrança registrada")
+    const events = await db.select().from(schema.subscriptionEvents).where(eq(schema.subscriptionEvents.subscriptionId, sub.id))
+    assert.equal(events.filter((e) => e.type === "created" && (e.details as { afterTrial?: boolean })?.afterTrial).length, 1)
+  })
+
+  test("execuções simultâneas do cron criam uma única assinatura", async () => {
+    const { gateway: _g, result } = await trialCheckout()
+    const sub = result.subscription
+    const { gateway, calls } = fakeGateway({ createDelayMs: 30 })
+    const runs = await Promise.all(
+      [0, 1, 2, 3].map(() => processGatewayActivations(db, gateway, sub.trialEndsAt!, { retryDelayMs: 0 }))
+    )
+    assert.ok(runs.every((r) => r.failedAttempts === 0))
+    assert.equal(callsFor(calls, sub.id).length, 1)
+    assert.ok((await getSub(sub.id)).gatewaySubscriptionId)
+  })
+
+  test("falha temporária de rede é repetida na mesma execução e se recupera", async () => {
+    const { result } = await trialCheckout()
+    const sub = result.subscription
+    const { gateway, calls } = fakeGateway({ failCreateTimes: 2 })
+    await processGatewayActivations(db, gateway, sub.trialEndsAt!, { retryDelayMs: 0 })
+    assert.equal(callsFor(calls, sub.id).length, 3)
+    assert.ok((await getSub(sub.id)).gatewaySubscriptionId)
+  })
+
+  test("timeout após o Asaas criar: a nova tentativa encontra a assinatura e não cria outra", async () => {
+    const { result } = await trialCheckout()
+    const sub = result.subscription
+    const { gateway, calls } = fakeGateway({ loseCreateResponseTimes: 1 })
+    await processGatewayActivations(db, gateway, sub.trialEndsAt!, { retryDelayMs: 0 })
+    assert.equal(callsFor(calls, sub.id).length, 1)
+    assert.ok((await getSub(sub.id)).gatewaySubscriptionId)
+  })
+
+  test("Asaas fora do ar: fica pendente, cliente mantém o acesso e a próxima execução conclui", async () => {
+    const { business, result } = await trialCheckout()
+    const sub = result.subscription
+    const end = sub.trialEndsAt!
+    const down = fakeGateway({ failCreateTimes: 99 })
+    const summary = await processGatewayActivations(db, down.gateway, end, { retryDelayMs: 0 })
+    assert.ok(summary.failedAttempts >= 1)
+    let row = await getSub(sub.id)
+    assert.equal(row.gatewayActivationStatus, "pending")
+    assert.equal(row.gatewayActivationAttempts, 1)
+    assert.match(row.gatewayActivationLastError ?? "", /fetch failed/)
+    const failures = await db.select().from(schema.subscriptionEvents).where(eq(schema.subscriptionEvents.subscriptionId, sub.id))
+    assert.equal(failures.filter((e) => e.type === "gateway_activation_failed").length, 1)
+    // Sem cobrança gerada, o cliente não é bloqueado por falha nossa, nem depois da carência.
+    assert.equal(computeBillingAccess(business, row, new Date(end.getTime() + (GRACE_DAYS + 2) * DAY), 7).allowed, true)
+
+    // Dentro da janela de reserva não tenta de novo (evita chamada duplicada).
+    await processGatewayActivations(db, down.gateway, new Date(end.getTime() + 60_000), { retryDelayMs: 0 })
+    assert.equal((await getSub(sub.id)).gatewayActivationAttempts, 1)
+
+    const up = fakeGateway()
+    await processGatewayActivations(db, up.gateway, new Date(end.getTime() + GATEWAY_ACTIVATION_LEASE_MS + 1), { retryDelayMs: 0 })
+    row = await getSub(sub.id)
+    assert.ok(row.gatewaySubscriptionId)
+    assert.equal(row.gatewayActivationStatus, "done")
+    assert.equal(row.gatewayActivationLastError, null)
+    assert.equal(callsFor(up.calls, sub.id).length, 1)
+  })
+
+  test("erro de validação (4xx) não é repetido na mesma execução", async () => {
+    const { result } = await trialCheckout()
+    const sub = result.subscription
+    const { gateway, calls } = fakeGateway({ rejectCreate: true })
+    await processGatewayActivations(db, gateway, sub.trialEndsAt!, { retryDelayMs: 0 })
+    assert.equal(callsFor(calls, sub.id).length, 1)
+    assert.equal((await getSub(sub.id)).gatewayActivationStatus, "pending")
+  })
+
+  test("troca de plano no trial só muda a escolha local; a assinatura nasce com o novo plano", async () => {
+    const plans = await listPublicPlans(db)
+    const { gateway, calls, result } = await trialCheckout(new Date(), plans[0].id)
+    const target = plans.find((p) => p.id !== plans[0].id)!
+    await changeOwnPlan(db, gateway, result.subscription, target.id, { userId: "u1", source: "owner" })
+    assert.equal(calls.filter((c) => c.op === "updateSubscription").length, 0)
+    await processGatewayActivations(db, gateway, result.subscription.trialEndsAt!, { retryDelayMs: 0 })
+    const input = callsFor(calls, result.subscription.id)[0].args[0] as Record<string, unknown>
+    assert.equal(input.value, target.priceCents / 100)
+    assert.equal(input.cycle, target.billingInterval === "year" ? "YEARLY" : "MONTHLY")
+  })
+
+  test("cancelamento durante o trial impede a criação da cobrança", async () => {
+    const { gateway, calls, result } = await trialCheckout()
+    await cancelOwnSubscription(db, gateway, result.subscription, "period_end", { userId: "u1", source: "owner" }, "teste")
+    await processGatewayActivations(db, gateway, result.subscription.trialEndsAt!, { retryDelayMs: 0 })
+    assert.equal(callsFor(calls, result.subscription.id).length, 0)
+    assert.equal(calls.filter((c) => c.op === "cancelSubscription").length, 0)
+  })
+
+  test("pagamento confirmado pelo webhook ativa e mantém o acesso", async () => {
+    const { business, result } = await checkout()
+    const sub = result.subscription
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_${crypto.randomUUID()}`))
+    const row = await getSub(sub.id)
+    assert.equal(row.status, "active")
+    assert.equal(computeBillingAccess(business, row, new Date(sub.trialEndsAt!.getTime() + 20 * DAY), 7).allowed, true)
+  })
+
+  test("sem pagamento: inadimplência, bloqueio após a carência e cancelamento no Asaas", async () => {
+    const { business, result } = await checkout()
+    const sub = result.subscription
+    assert.ok(sub.gatewaySubscriptionId)
+    await webhook(paymentEvent("PAYMENT_OVERDUE", sub, `pay_${crypto.randomUUID()}`, { confirmedDate: null }))
+    const row = await getSub(sub.id)
+    assert.equal(row.status, "past_due")
+    const end = sub.trialEndsAt!
+    assert.equal(computeBillingAccess(business, row, new Date(end.getTime() + DAY), 7).allowed, true)
+    assert.equal(computeBillingAccess(business, row, new Date(end.getTime() + (GRACE_DAYS + 1) * DAY), 7).state, "blocked_unpaid")
+
+    const { gateway, calls } = fakeGateway()
+    await runBillingCron(db, new Date(end.getTime() + (GRACE_DAYS + 1) * DAY), gateway)
+    assert.equal((await getSub(sub.id)).status, "expired")
+    assert.equal(calls.filter((c) => c.op === "cancelSubscription" && c.args[0] === sub.gatewaySubscriptionId).length, 1)
   })
 })
 

@@ -33,6 +33,8 @@ async function request<T>(path: string, init: { method?: string; body?: unknown 
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
     cache: "no-store",
+    // Limita a chamada a bem menos que a reserva do cron (10 min), evitando duas tentativas simultâneas.
+    signal: AbortSignal.timeout(30_000),
   })
 
   const data = (await response.json().catch(() => ({}))) as { errors?: { description?: string }[] }
@@ -84,6 +86,14 @@ export function createSubscription(input: {
     method: "POST",
     body: { ...input, billingType: input.billingType ?? "UNDEFINED" },
   })
+}
+
+/** Assinatura não removida com o externalReference informado (id da assinatura local). */
+export async function findSubscriptionByReference(externalReference: string) {
+  const result = await request<{ data: (AsaasSubscription & { deleted?: boolean })[] }>(
+    `/subscriptions?externalReference=${encodeURIComponent(externalReference)}&limit=10`
+  )
+  return result.data?.find((s) => !s.deleted && s.status !== "INACTIVE") ?? null
 }
 
 export function getSubscription(id: string) {
