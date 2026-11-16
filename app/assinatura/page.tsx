@@ -7,6 +7,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { INTERVAL_LABEL, PAYMENT_METHOD_LABEL, SUBSCRIPTION_STATUS, TRANSACTION_STATUS } from "@/lib/admin/labels"
 import { computeBillingAccess } from "@/lib/billing/access"
 import { getBillingOverview } from "@/lib/billing/self-service"
+import { isContracted } from "@/lib/billing/subscriptions"
 import { requireAccess } from "@/lib/business"
 import { db } from "@/lib/db"
 import { formatCents, formatDate } from "@/lib/format"
@@ -17,7 +18,12 @@ export default async function BillingPage() {
   const { subscription: sub, plan, transactions, pending } = await getBillingOverview(db, access.business.id)
   const billing = computeBillingAccess(access.business, sub)
   const status = sub ? SUBSCRIPTION_STATUS[sub.status] : null
-  const nextCharge = pending[0]?.dueDate ?? (sub?.cancelAtPeriodEnd ? null : sub?.currentPeriodEnd)
+  const contracted = sub ? isContracted(sub) : false
+  // Contratado no trial: a assinatura e a primeira cobrança são criadas no Asaas no fim do teste.
+  const scheduledFirstCharge = sub?.gatewayActivationStatus === "pending"
+  const nextCharge = scheduledFirstCharge
+    ? sub?.trialEndsAt
+    : pending[0]?.dueDate ?? (sub?.cancelAtPeriodEnd ? null : sub?.currentPeriodEnd)
   const waitingConfirmation = sub && ["awaiting_payment", "payment_pending", "trialing"].includes(sub.status) && pending.length > 0
 
   return (
@@ -67,19 +73,22 @@ export default async function BillingPage() {
           </div>
           <div className="flex flex-col gap-1">
             <dt className="text-muted-foreground">Próxima cobrança</dt>
-            <dd className="font-medium text-foreground">{sub?.gatewaySubscriptionId ? formatDate(nextCharge) : "—"}</dd>
+            <dd className="font-medium text-foreground">{contracted ? formatDate(nextCharge) : "—"}</dd>
+            {scheduledFirstCharge && (
+              <p className="text-xs leading-relaxed text-muted-foreground">Nada é cobrado antes do fim do teste.</p>
+            )}
           </div>
           <div className="flex flex-col gap-1">
             <dt className="text-muted-foreground">Renovação</dt>
             <dd className="font-medium text-foreground">
-              {sub?.cancelAtPeriodEnd ? "Cancelamento agendado" : sub?.gatewaySubscriptionId ? "Automática" : "—"}
+              {sub?.cancelAtPeriodEnd ? "Cancelamento agendado" : contracted ? "Automática" : "—"}
             </dd>
           </div>
         </dl>
 
         {isOwner ? (
           <div className="flex flex-wrap gap-3">
-            <Link href="/assinatura/planos" className={buttonVariants()}>{sub?.gatewaySubscriptionId ? "Mudar de plano" : "Escolher um plano"}</Link>
+            <Link href="/assinatura/planos" className={buttonVariants()}>{contracted ? "Mudar de plano" : "Escolher um plano"}</Link>
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">Somente o proprietário pode contratar ou alterar o plano.</p>
@@ -151,7 +160,7 @@ export default async function BillingPage() {
         )}
       </section>
 
-      {isOwner && sub?.gatewaySubscriptionId && !sub.cancelAtPeriodEnd && (
+      {isOwner && sub && contracted && !sub.cancelAtPeriodEnd && (
         <section aria-labelledby="cancelar" className="flex flex-col gap-3 rounded-xl border p-5">
           <h2 id="cancelar" className="font-semibold text-foreground">
             Cancelar assinatura
@@ -159,7 +168,9 @@ export default async function BillingPage() {
           <p className="text-sm leading-relaxed text-muted-foreground">
             {sub.status === "active" && sub.currentPeriodEnd
               ? `Novas cobranças param imediatamente. Você continua com acesso até ${formatDate(sub.currentPeriodEnd)}.`
-              : "Novas cobranças param imediatamente e a cobrança em aberto é cancelada."}
+              : scheduledFirstCharge
+                ? "A primeira cobrança agendada para o fim do teste não será gerada."
+                : "Novas cobranças param imediatamente e a cobrança em aberto é cancelada."}
           </p>
           <BillingForm
             action={cancelOwnAction}

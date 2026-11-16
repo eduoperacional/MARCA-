@@ -1,7 +1,7 @@
-import { and, asc, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, isNull, lt, lte, or, sql } from "drizzle-orm"
 
 import * as schema from "@/lib/db/schema"
-import type { PlanRow, SubscriptionRow } from "@/lib/db/schema"
+import type { BillingInterval, PlanRow, SubscriptionRow } from "@/lib/db/schema"
 import { businessTrialEnd } from "@/lib/billing/access"
 import { ASAAS, parseAsaasDate, reprocessFailedEvents, type BillingDb } from "@/lib/billing/process-asaas-event"
 import {
@@ -13,12 +13,14 @@ import {
   getCurrentSubscription,
   getGatewayCustomerId,
   hasHadSubscription,
+  isContracted,
   revertScheduledCancel,
+  runBillingMaintenance,
   type Actor,
 } from "@/lib/billing/subscriptions"
 import { isPlanAvailableTo } from "@/lib/billing/test-plan"
 
-const { billingTransactions, plans } = schema
+const { billingTransactions, plans, subscriptionEvents, subscriptions } = schema
 
 export type BillingType = "PIX" | "BOLETO" | "CREDIT_CARD"
 
@@ -43,6 +45,8 @@ export type CheckoutGateway = {
     billingType?: BillingType
     maxPayments?: number
   }): Promise<{ id: string }>
+  /** Assinatura já criada no Asaas para este externalReference (recupera uma criação interrompida). */
+  findSubscriptionByReference(externalReference: string): Promise<{ id: string } | null>
   updateSubscription(
     id: string,
     input: { value: number; cycle: "MONTHLY" | "YEARLY"; description: string; billingType?: BillingType }
@@ -56,7 +60,8 @@ export type CheckoutGateway = {
 export class BillingRuleError extends Error {}
 
 const cycle = (interval: "month" | "year") => (interval === "year" ? "YEARLY" : "MONTHLY")
-const planDescription = (plan: PlanRow) => `MARCAÍ - Plano ${plan.name} (${plan.billingInterval === "year" ? "anual" : "mensal"})`
+const planDescription = (plan: { name: string }, interval: BillingInterval) =>
+  `MARCAÍ - Plano ${plan.name} (${interval === "year" ? "anual" : "mensal"})`
 
 /** Data no fuso de Brasília no formato que o Asaas espera (AAAA-MM-DD). */
 export function brazilDate(date: Date) {
@@ -155,7 +160,7 @@ export async function startCheckout(
   if (!plan) throw new BillingRuleError("Plano indisponível.")
 
   const current = await getCurrentSubscription(db, input.business.id)
-  if (current?.gatewaySubscriptionId) {
+  if (current && isContracted(current)) {
     throw new BillingRuleError("Você já possui uma assinatura em andamento. Use a opção de mudar de plano.")
   }
 
@@ -179,7 +184,7 @@ export async function startCheckout(
   }
 
   // Trial é do estabelecimento (7 dias desde o cadastro), não do plano: contratar, cancelar ou
-  // recontratar não reinicia o prazo. A primeira cobrança do Asaas vence exatamente no fim dele.
+  // recontratar não reinicia o prazo.
   const trialEnd = businessTrialEnd(input.business)
   const inTrial = !(await hasHadSubscription(db, input.business.id)) && trialEnd > now
 
@@ -190,6 +195,8 @@ export async function startCheckout(
       plan,
       trialEndsAt: inTrial ? trialEnd : null,
       gatewayCustomerId: customerId,
+      billingType: input.billingType,
+      deferGateway: inTrial,
       now,
     })
   } catch (error) {
@@ -198,14 +205,20 @@ export async function startCheckout(
     throw error
   }
 
+  // Durante o trial nada é criado no Asaas: criar a assinatura gera a primeira cobrança (e o
+  // QR Code Pix) na hora, mesmo com vencimento futuro. O cron a cria ao fim do trial.
+  if (sub.gatewayActivationStatus === "pending") {
+    return { subscription: sub, plan, pendingTransactionId: null }
+  }
+
   let gatewaySub: { id: string }
   try {
     gatewaySub = await gateway.createSubscription({
       customer: customerId,
       value: plan.priceCents / 100,
-      nextDueDate: brazilDate(sub.trialEndsAt ?? now),
+      nextDueDate: brazilDate(now),
       cycle: cycle(plan.billingInterval),
-      description: planDescription(plan),
+      description: planDescription(plan, plan.billingInterval),
       externalReference: sub.id,
       billingType: input.billingType,
     })
@@ -225,7 +238,7 @@ export async function startCheckout(
 }
 
 export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub: SubscriptionRow, planId: string, actor: Actor) {
-  if (!sub.gatewaySubscriptionId) throw new BillingRuleError("Contrate um plano antes de alterá-lo.")
+  if (!isContracted(sub)) throw new BillingRuleError("Contrate um plano antes de alterá-lo.")
   if (sub.status === "past_due" || sub.status === "suspended") {
     throw new BillingRuleError("Regularize a cobrança em aberto antes de mudar de plano.")
   }
@@ -235,13 +248,216 @@ export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub
   if (!plan || plan.isTest) throw new BillingRuleError("Plano indisponível.")
   if (plan.id === sub.planId) throw new BillingRuleError("Este já é o seu plano atual.")
 
-  await gateway.updateSubscription(sub.gatewaySubscriptionId, {
-    value: plan.priceCents / 100,
-    cycle: cycle(plan.billingInterval),
-    description: planDescription(plan),
-  })
+  // No trial ainda não há assinatura no Asaas: a troca só muda o plano que o cron vai contratar.
+  if (sub.gatewaySubscriptionId) {
+    await gateway.updateSubscription(sub.gatewaySubscriptionId, {
+      value: plan.priceCents / 100,
+      cycle: cycle(plan.billingInterval),
+      description: planDescription(plan, plan.billingInterval),
+    })
+  }
   await changePlanLocal(db, sub, plan, actor, "Alterado pelo proprietário")
   return plan
+}
+
+export const GATEWAY_ACTIVATION_LEASE_MS = 10 * 60_000
+const GATEWAY_ACTIVATION_BATCH = 100
+const RETRIES_PER_RUN = 3
+
+/** Falhas de rede, timeout, 429 e 5xx podem passar sozinhas; erros de validação (4xx) não. */
+function isTransient(error: unknown) {
+  const status = (error as { status?: unknown })?.status
+  return typeof status !== "number" || status === 429 || status >= 500
+}
+
+async function withRetry<T>(fn: () => Promise<T>, delayMs: number) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      if (attempt >= RETRIES_PER_RUN || !isTransient(error)) throw error
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt))
+    }
+  }
+}
+
+export type GatewayActivationSummary = {
+  /** Assinaturas criadas no Asaas nesta execução. */
+  activated: number
+  /** Ativações que falharam nesta execução e serão repetidas. */
+  failedAttempts: number
+  /** Trials encerrados ainda aguardando a criação da assinatura no Asaas. */
+  pending: number
+}
+
+/**
+ * Cria no Asaas a assinatura dos trials encerrados, com o plano, o valor e a forma de pagamento
+ * escolhidos. Idempotente:
+ * - cada item é reservado com UPDATE condicional (execuções simultâneas não processam o mesmo item);
+ * - antes de criar, procura no Asaas uma assinatura com o mesmo externalReference, recuperando uma
+ *   criação que deu certo no Asaas mas não foi registrada aqui (timeout, queda da função);
+ * - o vínculo só é gravado se ainda não houver gatewaySubscriptionId (índice único no banco).
+ * Em falha, o item continua 'pending' e o cliente mantém o acesso até a próxima tentativa.
+ */
+export async function processGatewayActivations(
+  db: BillingDb,
+  gateway: CheckoutGateway,
+  now = new Date(),
+  opts: { retryDelayMs?: number } = {}
+) {
+  const retryDelayMs = opts.retryDelayMs ?? 1_000
+  let activated = 0
+  let failedAttempts = 0
+  const leaseLimit = new Date(now.getTime() - GATEWAY_ACTIVATION_LEASE_MS)
+  const due = and(
+    eq(subscriptions.gatewayActivationStatus, "pending"),
+    eq(subscriptions.status, "trialing"),
+    isNull(subscriptions.gatewaySubscriptionId),
+    lte(subscriptions.trialEndsAt, now)
+  )
+  const claimable = and(
+    due,
+    or(isNull(subscriptions.gatewayActivationLastAttemptAt), lt(subscriptions.gatewayActivationLastAttemptAt, leaseLimit))
+  )
+
+  const candidates = await db.select({ id: subscriptions.id }).from(subscriptions).where(claimable).limit(GATEWAY_ACTIVATION_BATCH)
+  for (const { id } of candidates) {
+    const [claimed] = await db
+      .update(subscriptions)
+      .set({
+        gatewayActivationAttempts: sql`${subscriptions.gatewayActivationAttempts} + 1`,
+        gatewayActivationLastAttemptAt: now,
+        updatedAt: now,
+      })
+      .where(and(eq(subscriptions.id, id), claimable))
+      .returning()
+    if (!claimed) continue
+
+    try {
+      const gatewaySubscriptionId = await activateOne(db, gateway, claimed, now, retryDelayMs)
+      if (gatewaySubscriptionId) activated++
+    } catch (error) {
+      failedAttempts++
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, 500)
+      console.error("[billing] falha ao criar assinatura no Asaas", claimed.id, `tentativa ${claimed.gatewayActivationAttempts}`, message)
+      await db
+        .update(subscriptions)
+        .set({ gatewayActivationLastError: message, updatedAt: now })
+        .where(and(eq(subscriptions.id, id), eq(subscriptions.gatewayActivationStatus, "pending")))
+      await db.insert(subscriptionEvents).values({
+        subscriptionId: claimed.id,
+        businessId: claimed.businessId,
+        type: "gateway_activation_failed",
+        fromStatus: claimed.status,
+        toStatus: claimed.status,
+        source: "system",
+        details: { attempt: claimed.gatewayActivationAttempts, error: message, willRetry: true },
+      })
+    }
+  }
+
+  const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(subscriptions).where(due)
+  return { activated, failedAttempts, pending: count } satisfies GatewayActivationSummary
+}
+
+async function activateOne(db: BillingDb, gateway: CheckoutGateway, claimed: SubscriptionRow, now: Date, retryDelayMs: number) {
+  if (!claimed.gatewayCustomerId) throw new Error("Assinatura sem cliente no Asaas.")
+  const customer = claimed.gatewayCustomerId
+  const [plan] = await db.select({ name: plans.name }).from(plans).where(eq(plans.id, claimed.planId)).limit(1)
+  const name = plan?.name ?? "MARCAÍ"
+
+  const gatewaySubscriptionId = await withRetry(async () => {
+    const existing = await gateway.findSubscriptionByReference(claimed.id)
+    if (existing) return existing.id
+    const created = await gateway.createSubscription({
+      customer,
+      value: claimed.priceCents / 100,
+      // O trial acabou: a primeira cobrança vence hoje (o Asaas não aceita vencimento no passado).
+      nextDueDate: brazilDate(claimed.trialEndsAt && claimed.trialEndsAt > now ? claimed.trialEndsAt : now),
+      cycle: cycle(claimed.billingInterval),
+      description: planDescription({ name }, claimed.billingInterval),
+      externalReference: claimed.id,
+      billingType: claimed.gatewayBillingType ?? undefined,
+    })
+    return created.id
+  }, retryDelayMs)
+
+  const attached = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(subscriptions)
+      .set({
+        gatewaySubscriptionId,
+        gatewayActivationStatus: "done",
+        gatewayActivatedAt: now,
+        gatewayActivationLastError: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(subscriptions.id, claimed.id),
+          eq(subscriptions.status, "trialing"),
+          eq(subscriptions.gatewayActivationStatus, "pending"),
+          isNull(subscriptions.gatewaySubscriptionId)
+        )
+      )
+      .returning()
+    if (row) {
+      await tx.insert(subscriptionEvents).values({
+        subscriptionId: row.id,
+        businessId: row.businessId,
+        type: "created",
+        fromStatus: claimed.status,
+        toStatus: row.status,
+        source: "system",
+        details: {
+          gatewaySubscriptionId,
+          planId: row.planId,
+          priceCents: row.priceCents,
+          billingInterval: row.billingInterval,
+          billingType: row.gatewayBillingType,
+          afterTrial: true,
+        },
+      })
+    }
+    return row ?? null
+  })
+
+  if (!attached) {
+    // Cancelada pelo cliente enquanto a assinatura era criada: interrompe a cobrança no Asaas.
+    try {
+      await gateway.cancelSubscription(gatewaySubscriptionId)
+    } catch (error) {
+      console.error("[billing] assinatura criada após cancelamento; enfileirada para cancelar", gatewaySubscriptionId, error)
+      await db
+        .update(subscriptions)
+        .set({ gatewaySubscriptionId, gatewayCancelStatus: "pending", updatedAt: new Date() })
+        .where(and(eq(subscriptions.id, claimed.id), isNull(subscriptions.gatewaySubscriptionId)))
+    }
+    return null
+  }
+
+  // Troca de plano durante a criação: aplica o valor vigente à assinatura recém-criada.
+  if (attached.priceCents !== claimed.priceCents || attached.billingInterval !== claimed.billingInterval) {
+    const [current] = await db.select({ name: plans.name }).from(plans).where(eq(plans.id, attached.planId)).limit(1)
+    await gateway
+      .updateSubscription(gatewaySubscriptionId, {
+        value: attached.priceCents / 100,
+        cycle: cycle(attached.billingInterval),
+        description: planDescription({ name: current?.name ?? name }, attached.billingInterval),
+      })
+      .catch((error) => console.error("[billing] falha ao ajustar plano após ativação", gatewaySubscriptionId, error))
+  }
+
+  await reprocessFailedEvents(db, gatewaySubscriptionId)
+  await syncPendingPayments(db, gateway, attached).catch((error) => console.error("[billing] falha ao listar cobranças", error))
+  return gatewaySubscriptionId
+}
+
+/** Rotina diária completa: cria as assinaturas dos trials encerrados e aplica a manutenção existente. */
+export async function runBillingCron(db: BillingDb, now = new Date(), gateway?: CheckoutGateway) {
+  const activation = gateway ? await processGatewayActivations(db, gateway, now) : null
+  const maintenance = await runBillingMaintenance(db, now, gateway)
+  return { activation, ...maintenance }
 }
 
 export async function cancelOwnSubscription(

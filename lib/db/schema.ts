@@ -293,11 +293,20 @@ export const subscriptions = pgTable("subscriptions", {
   gatewayCancelLastError: text("gateway_cancel_last_error"),
   gatewayCancelLastAttemptAt: timestamp("gateway_cancel_last_attempt_at", { withTimezone: true }),
   gatewayCanceledAt: timestamp("gateway_canceled_at", { withTimezone: true }),
+  gatewayBillingType: text("gateway_billing_type").$type<GatewayBillingType>(),
+  gatewayActivationStatus: text("gateway_activation_status").$type<GatewayActivationStatus>(),
+  gatewayActivationAttempts: integer("gateway_activation_attempts").notNull().default(0),
+  gatewayActivationLastError: text("gateway_activation_last_error"),
+  gatewayActivationLastAttemptAt: timestamp("gateway_activation_last_attempt_at", { withTimezone: true }),
+  gatewayActivatedAt: timestamp("gateway_activated_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 })
 
 export type GatewayCancelStatus = "pending" | "done" | "failed"
+/** pending: plano escolhido no trial, assinatura no Asaas ainda não criada; done: criada pelo cron. */
+export type GatewayActivationStatus = "pending" | "done"
+export type GatewayBillingType = "PIX" | "BOLETO" | "CREDIT_CARD"
 
 export const subscriptionEvents = pgTable("subscription_events", {
   id: uuid("id").primaryKey().defaultRandom(),

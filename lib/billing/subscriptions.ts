@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 
 import * as schema from "@/lib/db/schema"
-import type { PlanRow, SubscriptionRow, SubscriptionStatus } from "@/lib/db/schema"
+import type { GatewayBillingType, PlanRow, SubscriptionRow, SubscriptionStatus } from "@/lib/db/schema"
 import { ASAAS, type BillingDb } from "@/lib/billing/process-asaas-event"
 
 const { businessNotes, businessSuspensions, plans, subscriptionEvents, subscriptions } = schema
@@ -10,6 +10,11 @@ export type Actor = { userId: string | null; source: "admin" | "system" | "owner
 
 const ENDED: SubscriptionStatus[] = ["canceled", "expired"]
 const CHECKOUT_LOCK_MS = 10 * 60_000
+
+/** Plano já contratado: assinatura criada no Asaas ou agendada para ser criada ao fim do trial. */
+export function isContracted(sub: Pick<SubscriptionRow, "gatewaySubscriptionId" | "gatewayActivationStatus">) {
+  return Boolean(sub.gatewaySubscriptionId) || sub.gatewayActivationStatus === "pending"
+}
 
 export async function getCurrentSubscription(db: BillingDb, businessId: string) {
   const [row] = await db
@@ -52,10 +57,20 @@ export async function hasHadSubscription(db: BillingDb, businessId: string) {
  */
 export async function createLocalSubscription(
   db: BillingDb,
-  input: { businessId: string; plan: PlanRow; trialEndsAt: Date | null; gatewayCustomerId: string; now?: Date }
+  input: {
+    businessId: string
+    plan: PlanRow
+    trialEndsAt: Date | null
+    gatewayCustomerId: string
+    billingType?: GatewayBillingType | null
+    /** Durante o trial: só registra a escolha; o cron cria a assinatura no Asaas ao fim do trial. */
+    deferGateway?: boolean
+    now?: Date
+  }
 ) {
   const now = input.now ?? new Date()
   const trialEndsAt = input.trialEndsAt && input.trialEndsAt > now ? input.trialEndsAt : null
+  const deferGateway = Boolean(input.deferGateway && trialEndsAt)
 
   return db.transaction(async (tx) => {
     const [current] = await tx
@@ -64,7 +79,7 @@ export async function createLocalSubscription(
       .where(and(eq(subscriptions.businessId, input.businessId), notInArray(subscriptions.status, ENDED)))
       .for("update")
       .limit(1)
-    if (current?.gatewaySubscriptionId) throw new Error("Este estabelecimento já possui uma assinatura em andamento.")
+    if (current && isContracted(current)) throw new Error("Este estabelecimento já possui uma assinatura em andamento.")
     // Contratação paralela ainda criando a assinatura no Asaas: substituí-la geraria duas cobranças.
     const contractingInProgress =
       current?.gateway === ASAAS &&
@@ -102,8 +117,20 @@ export async function createLocalSubscription(
         gatewayCustomerId: input.gatewayCustomerId,
         startedAt: now,
         trialEndsAt,
+        gatewayBillingType: input.billingType ?? null,
+        gatewayActivationStatus: deferGateway ? "pending" : null,
       })
       .returning()
+    if (deferGateway) {
+      await tx.insert(subscriptionEvents).values({
+        subscriptionId: sub.id,
+        businessId: sub.businessId,
+        type: "scheduled",
+        toStatus: sub.status,
+        source: "owner",
+        details: { planId: sub.planId, priceCents: sub.priceCents, billingType: input.billingType ?? null, firstChargeAt: trialEndsAt },
+      })
+    }
     return sub
   })
 }
@@ -282,7 +309,8 @@ export async function processGatewayCancellations(db: BillingDb, now: Date, gate
   const leaseLimit = new Date(now.getTime() - GATEWAY_CANCEL_LEASE_MS)
   const claimable = and(
     eq(subscriptions.gatewayCancelStatus, "pending"),
-    eq(subscriptions.status, "expired"),
+    // canceled: assinatura criada no Asaas ao fim do trial enquanto o cliente cancelava.
+    inArray(subscriptions.status, ["expired", "canceled"]),
     isNotNull(subscriptions.gatewaySubscriptionId),
     or(isNull(subscriptions.gatewayCancelLastAttemptAt), lt(subscriptions.gatewayCancelLastAttemptAt, leaseLimit))
   )
@@ -374,9 +402,12 @@ export async function runBillingMaintenance(db: BillingDb, now = new Date(), gat
           ),
           // A primeira cobrança vencida chega como PAYMENT_OVERDUE (past_due) antes do fim da carência;
           // sem esse caso o trial não pago nunca expirava e o Asaas seguia gerando cobranças.
+          // A carência conta da criação da cobrança no Asaas quando ela atrasou (falha temporária),
+          // e nunca corre enquanto a assinatura ainda não foi criada: o cliente não perde o acesso.
           and(
             inArray(subscriptions.status, ["trialing", "past_due"]),
-            lt(subscriptions.trialEndsAt, graceLimit),
+            or(isNull(subscriptions.gatewayActivationStatus), eq(subscriptions.gatewayActivationStatus, "done")),
+            sql`GREATEST(${subscriptions.trialEndsAt}, ${subscriptions.gatewayActivatedAt}) < ${graceLimit.toISOString()}::timestamptz`,
             sql`NOT EXISTS (SELECT 1 FROM billing_transactions t WHERE t.subscription_id = ${subscriptions.id} AND t.status IN ('approved', 'refunded'))`
           )
         )
