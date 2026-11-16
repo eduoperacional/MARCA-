@@ -4,24 +4,10 @@ const DAY = 86_400_000
 
 /** Regra comercial: todo estabelecimento novo tem 7 dias grátis, contados do cadastro. */
 export const TRIAL_DAYS = 7
-/** Trial da regra anterior, mantido para estabelecimentos cadastrados antes da troca. */
-export const LEGACY_TRIAL_DAYS = 14
-
-type Env = Record<string, string | undefined>
-
-/**
- * BILLING_TRIAL_7D_SINCE (ISO, ex.: "2026-11-20T00:00:00-03:00") marca o início da regra de 7 dias:
- * cadastros anteriores mantêm os 14 dias prometidos. Sem a variável, todos recebem 7 dias.
- */
-export function trialDaysFor(createdAt: Date, env: Env = process.env) {
-  const since = env.BILLING_TRIAL_7D_SINCE ? new Date(env.BILLING_TRIAL_7D_SINCE) : null
-  if (since && !Number.isNaN(since.getTime()) && createdAt < since) return LEGACY_TRIAL_DAYS
-  return TRIAL_DAYS
-}
 
 /** Fim do período grátis do estabelecimento. Contratar um plano não reinicia este prazo. */
-export function businessTrialEnd(business: { createdAt: Date }, env: Env = process.env) {
-  return new Date(business.createdAt.getTime() + trialDaysFor(business.createdAt, env) * DAY)
+export function businessTrialEnd(business: { createdAt: Date }) {
+  return new Date(business.createdAt.getTime() + TRIAL_DAYS * DAY)
 }
 /** Tolerância após o fim do trial ou do período pago antes de bloquear. */
 export const GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS ?? 3)
@@ -71,7 +57,7 @@ export function computeBillingAccess(
   business: BusinessLike,
   sub: SubLike | null,
   now = new Date(),
-  trialDays = trialDaysFor(business.createdAt)
+  trialDays = TRIAL_DAYS
 ): BillingAccess {
   const implicitTrialEnd = addDays(business.createdAt, trialDays)
   const paidThrough = sub?.currentPeriodEnd ?? null

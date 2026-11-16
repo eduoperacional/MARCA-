@@ -7,7 +7,7 @@ import { PGlite } from "@electric-sql/pglite"
 import { eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 
-import { GRACE_DAYS, TRIAL_DAYS, businessTrialEnd, computeBillingAccess, trialDaysFor } from "@/lib/billing/access"
+import { GRACE_DAYS, TRIAL_DAYS, businessTrialEnd, computeBillingAccess } from "@/lib/billing/access"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
 import {
   brazilDate,
@@ -640,19 +640,6 @@ describe("permissões de acesso", () => {
 
 
 describe("regra comercial: 7 dias grátis", () => {
-  function withEnv(vars: Record<string, string | undefined>) {
-    const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
-    for (const [k, v] of Object.entries(vars)) {
-      if (v === undefined) delete process.env[k]
-      else process.env[k] = v
-    }
-    return () => {
-      for (const [k, v] of Object.entries(previous)) {
-        if (v === undefined) delete process.env[k]
-        else process.env[k] = v
-      }
-    }
-  }
 
   async function contract(opts: { createdAt?: Date; planId?: string; billingType?: "PIX" | "BOLETO" | "CREDIT_CARD"; now?: Date } = {}) {
     const business = await newBusiness(opts.createdAt ?? new Date())
@@ -673,7 +660,7 @@ describe("regra comercial: 7 dias grátis", () => {
   test("TRIAL_DAYS é 7 e o fim do trial é 7 dias após o cadastro", () => {
     const createdAt = new Date("2026-11-10T12:00:00Z")
     assert.equal(TRIAL_DAYS, 7)
-    assert.equal(businessTrialEnd({ createdAt }, {}).getTime(), createdAt.getTime() + 7 * DAY)
+    assert.equal(businessTrialEnd({ createdAt }).getTime(), createdAt.getTime() + 7 * DAY)
   })
 
   test("cadastro novo: trial de 7 dias e primeira cobrança do Asaas agendada para o 7º dia", async () => {
@@ -714,20 +701,6 @@ describe("regra comercial: 7 dias grátis", () => {
       computeBillingAccess(business, trialing, new Date(createdAt.getTime() + (7 + GRACE_DAYS + 1) * DAY), 7).state,
       "blocked_unpaid"
     )
-  })
-
-  test("estabelecimentos anteriores à regra mantêm 14 dias (BILLING_TRIAL_7D_SINCE)", async () => {
-    const restore = withEnv({ BILLING_TRIAL_7D_SINCE: new Date(Date.now() - DAY).toISOString() })
-    try {
-      const createdAt = new Date(Date.now() - 3 * DAY)
-      const { created, result } = await contract({ createdAt })
-      const expectedEnd = new Date(createdAt.getTime() + 14 * DAY)
-      assert.equal(result.subscription.trialEndsAt!.getTime(), expectedEnd.getTime())
-      assert.equal(created.nextDueDate, brazilDate(expectedEnd))
-      assert.equal(trialDaysFor(new Date()), 7, "cadastros após a data recebem 7 dias")
-    } finally {
-      restore()
-    }
   })
 
   test("Start, Pro e Elite (mensal e anual): valor, ciclo e trial de 7 dias corretos", async () => {

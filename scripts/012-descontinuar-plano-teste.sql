@@ -3,7 +3,7 @@
 --
 -- O plano deixa de aparecer e não pode mais ser contratado (o servidor também bloqueia planos
 -- is_test). A linha não é apagada: assinaturas e cobranças antigas do teste apontam para ela.
--- Regra comercial nova: 7 dias grátis para todos, calculados no código a partir do cadastro.
+-- Regra comercial: todo cadastro novo tem exatamente 7 dias grátis (definido no código, sem env).
 BEGIN;
 
 UPDATE plans
