@@ -33,7 +33,7 @@ export function SetupWelcome({ userName, hasBusiness, nextStep }: { userName: st
         <p className="text-sm text-muted-foreground">Olá, {userName.split(" ")[0]}!</p>
         <h1 className="font-heading text-2xl font-semibold text-balance sm:text-3xl">Vamos preparar seu negócio para receber agendamentos?</h1>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          São 6 etapas curtas. Você pode trocar de formato a qualquer momento, e o que já estiver preenchido nunca precisa ser repetido.
+          São 6 etapas curtas. Nada do que você preencher se perde.
         </p>
       </header>
       <FormAlert message={error} />

@@ -32,14 +32,14 @@ export function RulesStep({ business, pending, onSubmit, onBack }: StepProps) {
     >
       <StepGuide topic="rules" />
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field id="interval" label="Intervalo entre horários" hint="De quanto em quanto tempo os horários são oferecidos.">
+        <Field id="interval" label="Intervalo entre horários" hint="Ex.: a cada 15 min (9:00, 9:15, 9:30).">
           <select id="interval" value={interval} onChange={(e) => setInterval(Number(e.target.value))} className={selectClass}>
             {SLOT_INTERVALS.map((m) => (
               <option key={m} value={m} className="bg-popover">{m} minutos</option>
             ))}
           </select>
         </Field>
-        <Field id="advance" label="Antecedência mínima" hint="Tempo mínimo entre o momento da marcação e o atendimento.">
+        <Field id="advance" label="Antecedência mínima" hint="Prazo mínimo para o cliente marcar.">
           <select id="advance" value={advance} onChange={(e) => setAdvance(Number(e.target.value))} className={selectClass}>
             {MIN_ADVANCE_OPTIONS.map((o) => (
               <option key={o.value} value={o.value} className="bg-popover">{o.label}</option>

@@ -235,7 +235,7 @@ export function ProfessionalsStep({
         </fieldset>
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium">Dias e horários de trabalho</p>
-          <p className="text-xs text-muted-foreground">Preenchido com o funcionamento do estabelecimento. Ajuste se necessário.</p>
+          <p className="text-xs text-muted-foreground">Já vem com o horário da loja. Ajuste se precisar.</p>
           <WeekScheduleEditor label="Jornada do profissional" value={schedule} onChange={setSchedule} />
         </div>
         <Button type="submit" variant="outline" disabled={saving} className="self-start">

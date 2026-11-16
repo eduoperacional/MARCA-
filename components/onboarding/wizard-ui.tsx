@@ -30,20 +30,26 @@ export function Field({ id, label, children, hint }: { id: string; label: string
 export function StepGuide({ topic }: { topic: HelpTopicKey }) {
   const t = HELP_TOPICS[topic]
   return (
-    <aside className="flex flex-col gap-3 rounded-xl border bg-muted/40 p-4 text-sm">
-      <p className="leading-relaxed text-muted-foreground">{t.intro}</p>
-      <ul className="flex list-disc flex-col gap-1 pl-4 leading-relaxed">
-        {t.howTo.map((tip) => (
-          <li key={tip}>{tip}</li>
+    <aside aria-label="Como preencher" className="flex flex-col gap-2.5 rounded-xl border bg-muted/40 p-4 text-sm">
+      <ol className="flex flex-col gap-2">
+        {t.howTo.map((tip, i) => (
+          <li key={tip} className="flex items-start gap-2.5 leading-relaxed">
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-brand-light">
+              {i + 1}
+            </span>
+            <span>{tip}</span>
+          </li>
         ))}
-      </ul>
-      <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-        <Lightbulb className="mt-0.5 size-3.5 shrink-0 text-brand-light" aria-hidden />
-        <span>
-          <span className="font-medium text-foreground">Exemplo: </span>
-          {t.example}
-        </span>
-      </p>
+      </ol>
+      {t.example && (
+        <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
+          <Lightbulb className="mt-0.5 size-3.5 shrink-0 text-brand-light" aria-hidden />
+          <span>
+            <span className="font-medium text-foreground">Exemplo: </span>
+            {t.example}
+          </span>
+        </p>
+      )}
     </aside>
   )
 }
