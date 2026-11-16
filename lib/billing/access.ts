@@ -2,8 +2,13 @@ import type { SubscriptionRow } from "@/lib/db/schema"
 
 const DAY = 86_400_000
 
-/** Dias de teste para estabelecimentos que ainda não contrataram nenhum plano. */
-export const DEFAULT_TRIAL_DAYS = Number(process.env.BILLING_TRIAL_DAYS ?? 14)
+/** Regra comercial: todo estabelecimento novo tem 7 dias grátis, contados do cadastro. */
+export const TRIAL_DAYS = 7
+
+/** Fim do período grátis do estabelecimento. Contratar um plano não reinicia este prazo. */
+export function businessTrialEnd(business: { createdAt: Date }) {
+  return new Date(business.createdAt.getTime() + TRIAL_DAYS * DAY)
+}
 /** Tolerância após o fim do trial ou do período pago antes de bloquear. */
 export const GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS ?? 3)
 
@@ -52,7 +57,7 @@ export function computeBillingAccess(
   business: BusinessLike,
   sub: SubLike | null,
   now = new Date(),
-  trialDays = DEFAULT_TRIAL_DAYS
+  trialDays = TRIAL_DAYS
 ): BillingAccess {
   const implicitTrialEnd = addDays(business.createdAt, trialDays)
   const paidThrough = sub?.currentPeriodEnd ?? null
@@ -94,7 +99,8 @@ export function computeBillingAccess(
       return { state: "blocked_unpaid", allowed: false, until: null, notice: "Aguardando a confirmação do pagamento." }
     }
     case "past_due": {
-      const base = paidThrough ?? (implicitTrialEnd > now ? implicitTrialEnd : null)
+      // Primeira cobrança vencida ao fim do trial: a carência conta do fim do trial, como em trial_grace.
+      const base = paidThrough ?? sub.trialEndsAt ?? (implicitTrialEnd > now ? implicitTrialEnd : null)
       const graceEnd = base ? addDays(base, GRACE_DAYS) : null
       if (graceEnd && graceEnd > now) return { state: "past_due_grace", allowed: true, until: graceEnd, notice: "past_due" }
       return { state: "blocked_unpaid", allowed: false, until: null, notice: "Há uma cobrança em atraso." }

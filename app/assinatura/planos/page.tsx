@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 
 import { CheckoutForm, type PlanOption } from "@/components/billing/checkout-form"
 import { PLAN_FEATURES, PLAN_LIMITS } from "@/lib/admin/labels"
-import { DEFAULT_TRIAL_DAYS } from "@/lib/billing/access"
+import { TRIAL_DAYS, businessTrialEnd } from "@/lib/billing/access"
 import { enabledBillingTypes, isAsaasConfigured } from "@/lib/billing/asaas"
 import { listPublicPlans } from "@/lib/billing/self-service"
 import { getCurrentSubscription, hasHadSubscription } from "@/lib/billing/subscriptions"
@@ -39,10 +39,10 @@ export default async function PlansPage() {
   }))
 
   const mode = sub?.gatewaySubscriptionId ? "change" : "checkout"
-  const trialEnd = new Date(access.business.createdAt.getTime() + DEFAULT_TRIAL_DAYS * 86_400_000)
+  const trialEnd = businessTrialEnd(access.business)
   const trialNote =
     !hadSub && trialEnd > new Date()
-      ? `Você ainda está no período de teste. A primeira cobrança vence em ${formatDate(trialEnd)}; nada é cobrado antes disso.`
+      ? `Você tem ${TRIAL_DAYS} dias grátis no plano escolhido. A primeira cobrança é gerada automaticamente em ${formatDate(trialEnd)}; nada é cobrado antes disso.`
       : null
 
   return (

@@ -7,9 +7,10 @@ import { PGlite } from "@electric-sql/pglite"
 import { eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 
-import { computeBillingAccess } from "@/lib/billing/access"
+import { GRACE_DAYS, TRIAL_DAYS, businessTrialEnd, computeBillingAccess } from "@/lib/billing/access"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
 import {
+  brazilDate,
   cancelOwnSubscription,
   changeOwnPlan,
   listPublicPlans,
@@ -174,10 +175,12 @@ async function checkout(createdAt = new Date()) {
 }
 
 describe("migrations", () => {
-  test("002 a 011 executam em sequência: 6 planos comerciais + 1 de teste", async () => {
+  test("002 a 012 executam em sequência: 6 planos comerciais ativos + teste-5 desativado", async () => {
     const rows = await db.select().from(schema.plans)
     assert.equal(rows.length, 7)
     assert.deepEqual(rows.filter((p) => p.isTest).map((p) => p.code), ["teste-5"])
+    assert.equal(rows.find((p) => p.code === "teste-5")!.isActive, false)
+    assert.equal(rows.filter((p) => !p.isTest && p.isActive).length, 6)
   })
 
   test("são idempotentes (execução repetida não falha)", async () => {
@@ -188,6 +191,7 @@ describe("migrations", () => {
       "009-fila-cancelamento-gateway.sql",
       "010-enfileirar-trials-expirados.sql",
       "011-plano-teste-oculto.sql",
+      "012-descontinuar-plano-teste.sql",
     ]) {
       await pg.exec(fs.readFileSync(path.join(dir, file), "utf8"))
     }
@@ -392,7 +396,10 @@ describe("cron de cobrança", () => {
   test("expira trial vencido sem pagamento e cancela no Asaas", async () => {
     const { result } = await checkout(new Date(Date.now() - 10 * DAY))
     const sub = result.subscription
-    await db.update(schema.subscriptions).set({ trialEndsAt: new Date(Date.now() - 5 * DAY) }).where(eq(schema.subscriptions.id, sub.id))
+    await db
+      .update(schema.subscriptions)
+      .set({ status: "trialing", trialEndsAt: new Date(Date.now() - 5 * DAY) })
+      .where(eq(schema.subscriptions.id, sub.id))
     const { gateway, calls } = fakeGateway()
     const out = await runBillingMaintenance(db, new Date(), gateway)
     assert.ok(out.updated >= 1)
@@ -431,7 +438,10 @@ describe("cron: fila de cancelamentos no Asaas", () => {
   async function expiredTrial() {
     const { result } = await checkout(new Date(Date.now() - 10 * DAY))
     const sub = result.subscription
-    await db.update(schema.subscriptions).set({ trialEndsAt: new Date(Date.now() - 5 * DAY) }).where(eq(schema.subscriptions.id, sub.id))
+    await db
+      .update(schema.subscriptions)
+      .set({ status: "trialing", trialEndsAt: new Date(Date.now() - 5 * DAY) })
+      .where(eq(schema.subscriptions.id, sub.id))
     return sub
   }
 
@@ -628,165 +638,290 @@ describe("permissões de acesso", () => {
   })
 })
 
-describe("plano de teste interno (011)", () => {
-  const TESTER = "tester@marcai.com"
 
-  function withEnv(vars: Record<string, string | undefined>) {
-    const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
-    Object.assign(process.env, vars)
-    for (const [k, v] of Object.entries(vars)) if (v === undefined) delete process.env[k]
-    return () => {
-      for (const [k, v] of Object.entries(previous)) {
-        if (v === undefined) delete process.env[k]
-        else process.env[k] = v
-      }
-    }
-  }
+describe("regra comercial: 7 dias grátis", () => {
 
-  async function testCheckout(email = TESTER, business?: Awaited<ReturnType<typeof newBusiness>>) {
-    const plan = await planByCode("teste-5")
+  async function contract(opts: { createdAt?: Date; planId?: string; billingType?: "PIX" | "BOLETO" | "CREDIT_CARD"; now?: Date } = {}) {
+    const business = await newBusiness(opts.createdAt ?? new Date())
+    const planId = opts.planId ?? (await anyPlan()).id
     const { gateway, calls } = fakeGateway()
-    const b = business ?? (await newBusiness())
     const result = await startCheckout(db, gateway, {
-      business: b,
-      user: { id: "u-test", email },
-      planId: plan.id,
-      billingType: "PIX",
+      business,
+      user: { id: "u1", email: "dono@teste.com" },
+      planId,
+      billingType: opts.billingType ?? "PIX",
       cpfCnpj: "12345678909",
+      now: opts.now,
     })
-    return { business: b, plan, calls, result }
+    const created = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
+    return { business, gateway, calls, created, result }
   }
 
-  test("migration 011 não altera preços nem visibilidade de Start, Pro e Elite", async () => {
-    const rows = await db.select().from(schema.plans)
-    const commercial = rows.filter((p) => !p.isTest)
-    assert.equal(commercial.length, 6)
-    assert.ok(commercial.every((p) => !p.isHidden))
-    const test5 = rows.find((p) => p.code === "teste-5")!
-    assert.equal(test5.priceCents, 500)
-    assert.equal(test5.trialDays, 0)
+  test("TRIAL_DAYS é 7 e o fim do trial é 7 dias após o cadastro", () => {
+    const createdAt = new Date("2026-11-10T12:00:00Z")
+    assert.equal(TRIAL_DAYS, 7)
+    assert.equal(businessTrialEnd({ createdAt }).getTime(), createdAt.getTime() + 7 * DAY)
+  })
+
+  test("cadastro novo: trial de 7 dias e primeira cobrança do Asaas agendada para o 7º dia", async () => {
+    const createdAt = new Date()
+    const { created, result } = await contract({ createdAt })
+    const expectedEnd = new Date(createdAt.getTime() + 7 * DAY)
+    assert.equal(result.subscription.status, "trialing")
+    assert.equal(result.subscription.trialEndsAt!.getTime(), expectedEnd.getTime())
+    assert.equal(created.nextDueDate, brazilDate(expectedEnd))
+    assert.equal("maxPayments" in created, false, "assinatura recorrente, não cobrança única")
+  })
+
+  test("contratar no 5º dia não reinicia o prazo: cobrança continua no 7º dia do cadastro", async () => {
+    const createdAt = new Date(Date.now() - 5 * DAY)
+    const { created, result } = await contract({ createdAt })
+    const expectedEnd = new Date(createdAt.getTime() + 7 * DAY)
+    assert.equal(result.subscription.trialEndsAt!.getTime(), expectedEnd.getTime())
+    assert.equal(created.nextDueDate, brazilDate(expectedEnd))
+  })
+
+  test("contratação após os 7 dias cobra no mesmo dia, sem novo trial", async () => {
+    const now = new Date()
+    const { created, result } = await contract({ createdAt: new Date(now.getTime() - 8 * DAY), now })
+    assert.equal(result.subscription.trialEndsAt, null)
+    assert.equal(created.nextDueDate, brazilDate(now))
+  })
+
+  test("acesso: liberado durante os 7 dias e na carência; bloqueado depois, sem pagamento", () => {
+    const createdAt = new Date("2026-11-01T12:00:00Z")
+    const business = { createdAt }
+    assert.equal(computeBillingAccess(business, null, new Date(createdAt.getTime() + 6 * DAY), 7).state, "trial")
+    assert.equal(computeBillingAccess(business, null, new Date(createdAt.getTime() + 8 * DAY), 7).allowed, false)
+
+    const trialing = { status: "trialing" as const, trialEndsAt: new Date(createdAt.getTime() + 7 * DAY), currentPeriodEnd: null, courtesyUntil: null, cancelAtPeriodEnd: false }
+    assert.equal(computeBillingAccess(business, trialing, new Date(createdAt.getTime() + 6 * DAY), 7).state, "trial")
+    assert.equal(computeBillingAccess(business, trialing, new Date(createdAt.getTime() + 8 * DAY), 7).state, "trial_grace")
+    assert.equal(
+      computeBillingAccess(business, trialing, new Date(createdAt.getTime() + (7 + GRACE_DAYS + 1) * DAY), 7).state,
+      "blocked_unpaid"
+    )
+  })
+
+  test("Start, Pro e Elite (mensal e anual): valor, ciclo e trial de 7 dias corretos", async () => {
+    const plans = await listPublicPlans(db)
+    assert.equal(plans.length, 6)
+    for (const plan of plans) {
+      const createdAt = new Date()
+      const { created, result } = await contract({ createdAt, planId: plan.id })
+      assert.equal(created.value, plan.priceCents / 100)
+      assert.equal(created.cycle, plan.billingInterval === "year" ? "YEARLY" : "MONTHLY")
+      assert.equal(created.nextDueDate, brazilDate(new Date(createdAt.getTime() + 7 * DAY)))
+      assert.equal(result.subscription.planId, plan.id)
+      assert.equal(result.subscription.priceCents, plan.priceCents)
+    }
+  })
+
+  test("a forma de pagamento escolhida (Pix, boleto, cartão) vai para o Asaas", async () => {
+    for (const billingType of ["PIX", "BOLETO", "CREDIT_CARD"] as const) {
+      const { created } = await contract({ billingType })
+      assert.equal(created.billingType, billingType)
+    }
+  })
+})
+
+describe("primeira cobrança após o trial", () => {
+  async function trialSub(createdAt = new Date(Date.now() - 6 * DAY)) {
+    const { result } = await checkout(createdAt)
+    return result.subscription
+  }
+
+  async function txs(subId: string) {
+    return db.select().from(schema.billingTransactions).where(eq(schema.billingTransactions.subscriptionId, subId))
+  }
+
+  test("PAYMENT_CREATED do Asaas registra a primeira cobrança como pendente, sem criar outra", async () => {
+    const sub = await trialSub(new Date())
+    const before = (await txs(sub.id)).length
+    await webhook(paymentEvent("PAYMENT_CREATED", sub, "pay_first_created", { confirmedDate: null }))
+    const rows = await txs(sub.id)
+    assert.equal(rows.length, before + 1)
+    assert.equal(rows.find((t) => t.gatewayTransactionId === "pay_first_created")!.status, "pending")
+    assert.equal((await getSub(sub.id)).status, "trialing", "trial segue até o pagamento ou a carência")
+  })
+
+  test("confirmação da primeira cobrança ativa a assinatura com período a partir do vencimento", async () => {
+    const sub = await trialSub()
+    await webhook(paymentEvent("PAYMENT_CREATED", sub, "pay_first_ok"))
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, "pay_first_ok", { dueDate: "2026-11-15" }))
+    const after = await getSub(sub.id)
+    assert.equal(after.status, "active")
+    assert.equal(brazilDate(after.currentPeriodStart!), "2026-11-15")
+    assert.ok(after.currentPeriodEnd! > after.currentPeriodStart!)
+    const events = await db.select().from(schema.subscriptionEvents).where(eq(schema.subscriptionEvents.subscriptionId, sub.id))
+    assert.equal(events.filter((e) => e.type === "activated").length, 1)
+  })
+
+  test("renovação seguinte é registrada como renewed, sem nova cobrança criada pelo sistema", async () => {
+    const sub = await trialSub()
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, "pay_cycle_1", { dueDate: "2026-11-15" }))
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, "pay_cycle_2", { dueDate: "2026-12-15", confirmedDate: "2026-12-15" }))
+    const events = await db.select().from(schema.subscriptionEvents).where(eq(schema.subscriptionEvents.subscriptionId, sub.id))
+    assert.equal(events.filter((e) => e.type === "renewed").length, 1)
+    assert.equal(brazilDate((await getSub(sub.id)).currentPeriodStart!), "2026-12-15")
+  })
+
+  test("sem duplicidade: mesma cobrança vista no checkout e no webhook gera um único registro", async () => {
+    const sub = await trialSub(new Date())
+    const openId = `pay_open_${sub.gatewaySubscriptionId}`
+    await webhook(paymentEvent("PAYMENT_CREATED", sub, openId))
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, openId))
+    await webhook(paymentEvent("PAYMENT_RECEIVED", sub, openId))
+    const rows = (await txs(sub.id)).filter((t) => t.gatewayTransactionId === openId)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].status, "approved")
+  })
+
+  test("sem duplicidade: rotina diária no fim do trial não cria assinatura nem cobrança no Asaas", async () => {
+    const sub = await trialSub()
+    const { gateway, calls } = fakeGateway()
+    await runBillingMaintenance(db, new Date(), gateway)
+    await runBillingMaintenance(db, new Date(), gateway)
+    assert.equal(calls.filter((c) => c.op === "createSubscription").length, 0)
+    assert.equal((await getSub(sub.id)).status, "trialing")
+  })
+
+  test("sem duplicidade: segunda contratação simultânea do mesmo estabelecimento é recusada", async () => {
+    const business = await newBusiness()
+    const plan = await anyPlan()
+    const { gateway, calls } = fakeGateway()
+    const input = { business, user: { id: "u1", email: "a@a.com" }, planId: plan.id, billingType: "PIX" as const, cpfCnpj: "12345678909" }
+    const results = await Promise.allSettled([startCheckout(db, gateway, input), startCheckout(db, gateway, input)])
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1)
+    assert.equal(calls.filter((c) => c.op === "createSubscription").length, 1)
+  })
+})
+
+describe("inadimplência da primeira cobrança", () => {
+  test("PAYMENT_OVERDUE no fim do trial: past_due, acesso na carência e bloqueio depois", async () => {
+    const createdAt = new Date(Date.now() - 8 * DAY)
+    const { business, result } = await checkout(createdAt)
+    const sub = result.subscription
+    const trialEnd = new Date(createdAt.getTime() + 7 * DAY)
+    await db.update(schema.subscriptions).set({ trialEndsAt: trialEnd }).where(eq(schema.subscriptions.id, sub.id))
+    await webhook(paymentEvent("PAYMENT_OVERDUE", sub, "pay_overdue_first", { confirmedDate: null }))
+    const row = await getSub(sub.id)
+    assert.equal(row.status, "past_due")
+    assert.equal(computeBillingAccess(business, row, new Date(trialEnd.getTime() + DAY), 7).state, "past_due_grace")
+    assert.equal(computeBillingAccess(business, row, new Date(trialEnd.getTime() + (GRACE_DAYS + 1) * DAY), 7).state, "blocked_unpaid")
+  })
+
+  test("past_due vindo do trial expira após a carência e cancela a assinatura no Asaas (para de cobrar)", async () => {
+    const { result } = await checkout(new Date(Date.now() - 12 * DAY))
+    const sub = result.subscription
+    await db.update(schema.subscriptions).set({ trialEndsAt: new Date(Date.now() - 5 * DAY) }).where(eq(schema.subscriptions.id, sub.id))
+    await webhook(paymentEvent("PAYMENT_OVERDUE", sub, "pay_overdue_exp", { confirmedDate: null }))
+    assert.equal((await getSub(sub.id)).status, "past_due")
+
+    const { gateway, calls } = fakeGateway()
+    await runBillingMaintenance(db, new Date(), gateway)
+    assert.equal((await getSub(sub.id)).status, "expired")
+    assert.equal(calls.filter((c) => c.op === "cancelSubscription" && c.args[0] === sub.gatewaySubscriptionId).length, 1)
+
+    await runBillingMaintenance(db, new Date(Date.now() + 60 * 60_000), gateway)
+    assert.equal(
+      calls.filter((c) => c.op === "cancelSubscription" && c.args[0] === sub.gatewaySubscriptionId).length,
+      1,
+      "cancelamento não é repetido"
+    )
+  })
+
+  test("past_due de assinante que já pagou não é expirado pela regra do trial", async () => {
+    const { result } = await checkout(new Date(Date.now() - 60 * DAY))
+    const sub = result.subscription
+    await db
+      .update(schema.subscriptions)
+      .set({ trialEndsAt: null, status: "past_due", currentPeriodEnd: new Date(Date.now() - 10 * DAY) })
+      .where(eq(schema.subscriptions.id, sub.id))
+    await runBillingMaintenance(db, new Date())
+    assert.equal((await getSub(sub.id)).status, "past_due")
+  })
+
+  test("pagamento atrasado dentro da carência regulariza a assinatura", async () => {
+    const { result } = await checkout(new Date(Date.now() - 8 * DAY))
+    const sub = result.subscription
+    await webhook(paymentEvent("PAYMENT_OVERDUE", sub, "pay_late", { confirmedDate: null }))
+    await webhook(paymentEvent("PAYMENT_RECEIVED", sub, "pay_late"))
+    assert.equal((await getSub(sub.id)).status, "active")
+  })
+})
+
+describe("plano de teste interno descontinuado (012)", () => {
+  test("migration 012 desativa o teste-5 sem alterar Start, Pro e Elite", async () => {
+    const before = await db.select().from(schema.plans)
+    await pg.exec(fs.readFileSync(path.join(process.cwd(), "scripts", "012-descontinuar-plano-teste.sql"), "utf8"))
+    const after = await db.select().from(schema.plans)
+    const test5 = after.find((p) => p.code === "teste-5")!
+    assert.equal(test5.isActive, false)
     assert.equal(test5.isHidden, true)
+    const pick = (rows: typeof before) =>
+      rows
+        .filter((p) => !p.isTest)
+        .map((p) => ({ code: p.code, interval: p.billingInterval, price: p.priceCents, features: p.features, limits: p.limits, active: p.isActive, hidden: p.isHidden }))
+        .sort((a, b) => `${a.code}${a.interval}`.localeCompare(`${b.code}${b.interval}`))
+    assert.deepEqual(pick(after), pick(before))
+    assert.equal(pick(after).length, 6)
+    assert.ok(pick(after).every((p) => p.active && !p.hidden))
   })
 
-  test("listagem mostra o plano de teste para qualquer pessoa, sem BILLING_TEST_EMAILS", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
-    try {
-      const plans = await listPublicPlans(db)
-      assert.ok(plans.some((p) => p.code === "teste-5"))
-      assert.equal(plans.filter((p) => !p.isTest).length, 6)
-    } finally {
-      restore()
-    }
-  })
-
-  test("plano de teste disponível a todos; outros planos ocultos continuam fora", () => {
-    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: true }), true)
+  test("teste-5 não aparece na contratação", async () => {
+    const plans = await listPublicPlans(db)
+    assert.ok(!plans.some((p) => p.code === "teste-5" || p.isTest))
+    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: true }), false)
+    assert.equal(isPlanAvailableTo({ isHidden: false, isTest: true }), false)
     assert.equal(isPlanAvailableTo({ isHidden: false, isTest: false }), true)
-    assert.equal(isPlanAvailableTo({ isHidden: true, isTest: false }), false)
   })
 
-  test("qualquer e-mail contrata o plano de teste, sem lista de liberação", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
-    try {
-      const { calls, result } = await testCheckout("cliente-qualquer@x.com")
-      const create = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
-      assert.equal(create.value, 5)
-      assert.equal(create.maxPayments, 1)
-      assert.ok(result.subscription.gatewaySubscriptionId)
-    } finally {
-      restore()
-    }
-  })
-
-  test("cobrança imediata e única: sem trial e com maxPayments: 1", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
-    try {
-      const { calls, result } = await testCheckout()
-      const create = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
-      assert.equal(create.maxPayments, 1)
-      assert.equal(create.value, 5)
-      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date())
-      assert.equal(create.nextDueDate, today)
-      assert.equal(result.subscription.trialEndsAt, null)
-    } finally {
-      restore()
-    }
-  })
-
-  test("planos comerciais continuam com trial e sem maxPayments", async () => {
-    const { calls, result } = await checkout()
-    const create = calls.find((c) => c.op === "createSubscription")!.args[0] as Record<string, unknown>
-    assert.equal("maxPayments" in create, false)
-    assert.ok(result.subscription.trialEndsAt)
-  })
-
-  test("pagamento da cobrança única agenda o fim e a rotina diária encerra o acesso", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
-    try {
-      const { business, result } = await testCheckout()
-      const sub = result.subscription
-      await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_${crypto.randomUUID()}`, { value: 5 }))
-      const paid = await getSub(sub.id)
-      assert.equal(paid.status, "active")
-      assert.equal(paid.cancelAtPeriodEnd, true)
-      assert.ok(paid.currentPeriodEnd)
-
-      await runBillingMaintenance(db, new Date(paid.currentPeriodEnd!.getTime() + 60_000))
-      const ended = await getSub(sub.id)
-      assert.equal(ended.status, "canceled")
-      assert.equal(computeBillingAccess(business as never, ended as never, new Date(paid.currentPeriodEnd!.getTime() + 60_000)).allowed, false)
-    } finally {
-      restore()
-    }
-  })
-
-  test("SUBSCRIPTION_INACTIVATED do Asaas antes do pagamento não encerra a assinatura de teste", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
-    try {
-      const { result } = await testCheckout()
-      const sub = result.subscription
-      const before = await getSub(sub.id)
-      await webhook({ id: `evt_${crypto.randomUUID()}`, event: "SUBSCRIPTION_INACTIVATED", subscription: { id: sub.gatewaySubscriptionId, externalReference: sub.id } })
-      const after = await getSub(sub.id)
-      assert.equal(after.status, before.status)
-      assert.equal(after.endedAt, null)
-    } finally {
-      restore()
-    }
-  })
-
-  test("o mesmo estabelecimento não contrata o teste de novo sem autorização explícita", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: undefined, BILLING_TEST_REPEAT_EMAILS: undefined })
-    try {
-      const { business, result } = await testCheckout()
-      const sub = result.subscription
-      await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_${crypto.randomUUID()}`, { value: 5 }))
-      const paid = await getSub(sub.id)
-      await runBillingMaintenance(db, new Date(paid.currentPeriodEnd!.getTime() + 60_000))
-
-      await assert.rejects(testCheckout(TESTER, business), /já foi utilizado/)
-
-      process.env.BILLING_TEST_REPEAT_EMAILS = TESTER
-      const again = await testCheckout(TESTER, business)
-      assert.ok(again.result.subscription.gatewaySubscriptionId)
-    } finally {
-      restore()
-    }
-  })
-
-  test("assinante comercial não troca para o plano de teste, mesmo com ele visível", async () => {
-    const restore = withEnv({ BILLING_TEST_EMAILS: undefined })
-    try {
-      const { result } = await checkout()
-      const test5 = await planByCode("teste-5")
+  test("teste-5 não pode ser contratado, mesmo reativado por engano no banco", async () => {
+    const test5 = await planByCode("teste-5")
+    for (const active of [false, true]) {
+      await db.update(schema.plans).set({ isActive: active }).where(eq(schema.plans.id, test5.id))
+      const business = await newBusiness()
       const { gateway, calls } = fakeGateway()
       await assert.rejects(
-        changeOwnPlan(db, gateway, await getSub(result.subscription.id), test5.id, { userId: "u1", source: "owner" }),
+        startCheckout(db, gateway, { business, user: { id: "u", email: "x@x.com" }, planId: test5.id, billingType: "PIX", cpfCnpj: "12345678909" }),
         /Plano indisponível/
       )
-      assert.equal(calls.length, 0)
-    } finally {
-      restore()
+      assert.equal(calls.filter((c) => c.op === "createSubscription").length, 0)
     }
+    await db.update(schema.plans).set({ isActive: false }).where(eq(schema.plans.id, test5.id))
+  })
+
+  test("assinante comercial não troca para o teste-5", async () => {
+    const { result } = await checkout()
+    const test5 = await planByCode("teste-5")
+    const { gateway, calls } = fakeGateway()
+    await assert.rejects(
+      changeOwnPlan(db, gateway, await getSub(result.subscription.id), test5.id, { userId: "u1", source: "owner" }),
+      /Plano indisponível/
+    )
+    assert.equal(calls.length, 0)
+  })
+
+  test("assinatura de teste já existente continua tratada pelo webhook (cobrança única)", async () => {
+    const test5 = await planByCode("teste-5")
+    const business = await newBusiness()
+    const [legacy] = await db
+      .insert(schema.subscriptions)
+      .values({
+        businessId: business.id,
+        planId: test5.id,
+        status: "awaiting_payment",
+        priceCents: 500,
+        billingInterval: "month",
+        gatewaySubscriptionId: `sub_legacy_${crypto.randomUUID().slice(0, 8)}`,
+      })
+      .returning()
+    await webhook({ id: `evt_${crypto.randomUUID()}`, event: "SUBSCRIPTION_INACTIVATED", subscription: { id: legacy.gatewaySubscriptionId, externalReference: legacy.id } })
+    assert.equal((await getSub(legacy.id)).endedAt, null)
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", legacy, `pay_${crypto.randomUUID()}`, { value: 5 }))
+    const paid = await getSub(legacy.id)
+    assert.equal(paid.status, "active")
+    assert.equal(paid.cancelAtPeriodEnd, true)
   })
 })

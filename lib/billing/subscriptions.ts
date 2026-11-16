@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 
 import * as schema from "@/lib/db/schema"
 import type { PlanRow, SubscriptionRow, SubscriptionStatus } from "@/lib/db/schema"
@@ -9,6 +9,7 @@ const { businessNotes, businessSuspensions, plans, subscriptionEvents, subscript
 export type Actor = { userId: string | null; source: "admin" | "system" | "owner" }
 
 const ENDED: SubscriptionStatus[] = ["canceled", "expired"]
+const CHECKOUT_LOCK_MS = 10 * 60_000
 
 export async function getCurrentSubscription(db: BillingDb, businessId: string) {
   const [row] = await db
@@ -51,10 +52,10 @@ export async function hasHadSubscription(db: BillingDb, businessId: string) {
  */
 export async function createLocalSubscription(
   db: BillingDb,
-  input: { businessId: string; plan: PlanRow; trialDays: number; gatewayCustomerId: string; now?: Date }
+  input: { businessId: string; plan: PlanRow; trialEndsAt: Date | null; gatewayCustomerId: string; now?: Date }
 ) {
   const now = input.now ?? new Date()
-  const trialEndsAt = input.trialDays > 0 ? new Date(now.getTime() + input.trialDays * 86_400_000) : null
+  const trialEndsAt = input.trialEndsAt && input.trialEndsAt > now ? input.trialEndsAt : null
 
   return db.transaction(async (tx) => {
     const [current] = await tx
@@ -64,6 +65,12 @@ export async function createLocalSubscription(
       .for("update")
       .limit(1)
     if (current?.gatewaySubscriptionId) throw new Error("Este estabelecimento já possui uma assinatura em andamento.")
+    // Contratação paralela ainda criando a assinatura no Asaas: substituí-la geraria duas cobranças.
+    const contractingInProgress =
+      current?.gateway === ASAAS &&
+      current.gatewayCustomerId !== null &&
+      now.getTime() - current.startedAt.getTime() < CHECKOUT_LOCK_MS
+    if (contractingInProgress) throw new Error("Já existe uma contratação em andamento.")
     if (current) {
       await tx
         .update(subscriptions)
@@ -365,8 +372,10 @@ export async function runBillingMaintenance(db: BillingDb, now = new Date(), gat
             notInArray(subscriptions.status, ENDED),
             lt(subscriptions.currentPeriodEnd, now)
           ),
+          // A primeira cobrança vencida chega como PAYMENT_OVERDUE (past_due) antes do fim da carência;
+          // sem esse caso o trial não pago nunca expirava e o Asaas seguia gerando cobranças.
           and(
-            eq(subscriptions.status, "trialing"),
+            inArray(subscriptions.status, ["trialing", "past_due"]),
             lt(subscriptions.trialEndsAt, graceLimit),
             sql`NOT EXISTS (SELECT 1 FROM billing_transactions t WHERE t.subscription_id = ${subscriptions.id} AND t.status IN ('approved', 'refunded'))`
           )
