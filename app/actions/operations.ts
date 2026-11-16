@@ -7,6 +7,7 @@ import { cleanText, fail, isTime, isUuid, toCents } from "@/lib/actions/result"
 import { authorize, NO_PERMISSION } from "@/lib/business"
 import { db } from "@/lib/db"
 import { businesses, expenses, notifications } from "@/lib/db/schema"
+import { recordSetupChange } from "@/lib/setup-state"
 import { isValidLocalDate, timeToMinutes, toInstant } from "@/lib/time"
 import { insertTimeBlock, removeTimeBlock, type BlockActor } from "@/lib/time-blocks"
 import type { DaySchedule } from "@/lib/types"
@@ -131,6 +132,7 @@ export async function updateBusinessSettings(input: {
       onlineBookingEnabled: input.onlineBookingEnabled,
     })
     .where(eq(businesses.id, business.id))
+  await recordSetupChange(db, business.id, { reviewed: ["hours", "rules"] })
   return done()
 }
 

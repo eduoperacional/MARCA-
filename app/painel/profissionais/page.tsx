@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 
+import { HelpHint } from "@/components/help/help-hint"
 import { ProfessionalsView } from "@/components/professionals/professionals-view"
 import { getCurrentBusiness } from "@/lib/business"
 import { firstParam, resolvePeriod } from "@/lib/period"
@@ -28,11 +29,16 @@ export default async function ProfessionalsPage({ searchParams }: PageProps<"/pa
   }
 
   return (
-    <ProfessionalsView
-      professionals={professionals}
-      services={services}
-      monthStats={monthStats}
-      openCreate={firstParam(params.novo) === "1"}
-    />
+    <div className="flex flex-col gap-4">
+      <div className="flex justify-end">
+        <HelpHint topic="professionals" />
+      </div>
+      <ProfessionalsView
+        professionals={professionals}
+        services={services}
+        monthStats={monthStats}
+        openCreate={firstParam(params.novo) === "1"}
+      />
+    </div>
   )
 }

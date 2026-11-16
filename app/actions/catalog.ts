@@ -9,12 +9,19 @@ import { persistProfessional, persistService } from "@/lib/catalog-links"
 import { db } from "@/lib/db"
 import { appointments, clients, professionals, services } from "@/lib/db/schema"
 import { isValidPhone, normalizePhone } from "@/lib/phone"
+import { recordSetupChange } from "@/lib/setup-state"
 import { timeToMinutes } from "@/lib/time"
 import type { DaySchedule } from "@/lib/types"
 
 function done() {
   revalidatePath("/", "layout")
   return { ok: true as const }
+}
+
+/** Serviços e profissionais alteram o checklist de configuração inicial. */
+async function catalogChanged(businessId: string) {
+  await recordSetupChange(db, businessId)
+  return done()
 }
 
 /* ---------------------------------- Clientes --------------------------------- */
@@ -144,7 +151,7 @@ export async function saveProfessional(input: ProfessionalInput) {
     serviceIds: Array.isArray(input.serviceIds) ? input.serviceIds : [],
   })
   if (!result.ok) return fail(result.error)
-  return done()
+  return catalogChanged(business.id)
 }
 
 export async function setProfessionalActive(id: string, active: boolean) {
@@ -153,7 +160,7 @@ export async function setProfessionalActive(id: string, active: boolean) {
   if (!access) return fail(NO_PERMISSION)
   const business = access.business
   await db.update(professionals).set({ active }).where(and(eq(professionals.id, id), eq(professionals.businessId, business.id)))
-  return done()
+  return catalogChanged(business.id)
 }
 
 /* ---------------------------------- Serviços --------------------------------- */
@@ -197,7 +204,7 @@ export async function saveService(input: ServiceInput) {
     professionalIds: Array.isArray(input.professionalIds) ? input.professionalIds : [],
   })
   if (!result.ok) return fail(result.error)
-  return done()
+  return catalogChanged(business.id)
 }
 
 export async function setServiceActive(id: string, active: boolean) {
@@ -206,5 +213,5 @@ export async function setServiceActive(id: string, active: boolean) {
   if (!access) return fail(NO_PERMISSION)
   const business = access.business
   await db.update(services).set({ active }).where(and(eq(services.id, id), eq(services.businessId, business.id)))
-  return done()
+  return catalogChanged(business.id)
 }

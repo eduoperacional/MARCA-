@@ -65,12 +65,14 @@ export const getAccess = cache(async (): Promise<Access | null> => {
   }
 })
 
-/** Acesso obrigatório em páginas do painel; redireciona para login/onboarding. */
+/**
+ * Acesso obrigatório em páginas do painel; sem estabelecimento, redireciona para o onboarding.
+ * Estabelecimentos com configuração incompleta acessam o painel normalmente (checklist em /painel).
+ */
 export const requireAccess = cache(async (): Promise<Access> => {
   await requireUser()
   const access = await getAccess()
   if (!access) redirect("/onboarding")
-  if (!access.business.onboardingCompletedAt && access.role === "owner") redirect("/onboarding")
   return access
 })
 

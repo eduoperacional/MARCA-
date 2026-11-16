@@ -2,7 +2,10 @@ import type { Metadata } from "next"
 import { connection } from "next/server"
 
 import { DashboardOverview } from "@/components/dashboard/dashboard-overview"
-import { getCurrentBusiness } from "@/lib/business"
+import { SetupChecklist } from "@/components/onboarding/setup-checklist"
+import { getAccess, getCurrentBusiness } from "@/lib/business"
+import { db } from "@/lib/db"
+import { getSetupState } from "@/lib/setup-state"
 import { firstParam, resolvePeriod } from "@/lib/period"
 import { listAppointments } from "@/lib/queries/appointments"
 import { getDashboardData } from "@/lib/queries/dashboard"
@@ -24,15 +27,23 @@ export default async function OverviewPage({ searchParams }: PageProps<"/painel"
     today
   )
 
-  const [data, todayAppointments, options, todayOperations] = await Promise.all([
+  const access = await getAccess()
+  const [data, todayAppointments, options, todayOperations, setup] = await Promise.all([
     getDashboardData(business, selection),
     listAppointments(business.id, { from: today, to: today, order: "asc" }),
     getFormOptions(business.id),
     getTodayOperations(business, today),
+    access?.role === "owner" ? getSetupState(db, business.id) : null,
   ])
 
+  const showChecklist = setup?.available && !(setup.progress.ready && setup.record?.dismissedAt)
+
   return (
-    <DashboardOverview
+    <div className="flex flex-col gap-6">
+      {setup && showChecklist && (
+        <SetupChecklist progress={setup.progress} mode={setup.record?.mode ?? "guided"} dismissed={Boolean(setup.record?.dismissedAt)} />
+      )}
+      <DashboardOverview
       businessName={business.name}
       bookingSlug={business.slug}
       today={today}
@@ -41,6 +52,7 @@ export default async function OverviewPage({ searchParams }: PageProps<"/painel"
       todayAppointments={todayAppointments}
       todayOperations={todayOperations}
       options={options}
-    />
+      />
+    </div>
   )
 }
