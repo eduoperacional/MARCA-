@@ -77,7 +77,7 @@ async function appointmentsOf(businessId: string) {
 
 describe("constraint appointments_no_overlap (banco)", () => {
   test("os status que bloqueiam no banco são os mesmos da aplicação", () => {
-    const sqlStatuses = migrationSql().match(/WHERE \(%I IN \(([^)]*)\)\)/)![1].replace(/'/g, "").split(/,\s*/)
+    const sqlStatuses = migrationSql().match(/WHERE \(status IN \(([^)]*)\)\)/)![1].replace(/'/g, "").split(/,\s*/)
     assert.deepEqual([...sqlStatuses].sort(), [...BLOCKING_STATUSES].sort())
   })
 
@@ -233,96 +233,62 @@ describe("script 016 em bancos existentes", () => {
     assert.equal((await legacy.select().from(schema.appointments)).length, 2)
   })
 
-  test("aborta se appointments for uma view sobre outra tabela que não agendamentos", async () => {
+
+  test("instala btree_gist quando ausente e cria a regra numa tabela vazia", async () => {
     const pg = new PGlite({ extensions: { btree_gist } })
-    await pg.exec("CREATE TABLE base_real (id uuid); CREATE VIEW appointments AS SELECT * FROM base_real;")
-    await assert.rejects(pg.exec(migrationSql()), /não lê somente public\.agendamentos/)
+    await pg.exec(PRODUCTION_SHAPE)
+    const before = await pg.query("SELECT 1 FROM pg_extension WHERE extname = 'btree_gist'")
+    assert.equal(before.rows.length, 0)
+
+    await pg.exec(migrationSql())
+    await pg.exec(migrationSql())
+
+    const ext = await pg.query("SELECT 1 FROM pg_extension WHERE extname = 'btree_gist'")
+    assert.equal(ext.rows.length, 1)
+    const constraint = await pg.query<{ tabela: string; def: string }>(
+      "SELECT conrelid::regclass::text AS tabela, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'appointments_no_overlap'"
+    )
+    assert.equal(constraint.rows.length, 1)
+    assert.equal(constraint.rows[0].tabela, "appointments")
+    assert.match(constraint.rows[0].def, /EXCLUDE USING gist/)
   })
 
-  describe("formato de produção: view appointments sobre a tabela agendamentos", () => {
-    const PRODUCTION_SHAPE = `
-      CREATE TABLE agendamentos (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        id_do_negocio uuid NOT NULL,
-        id_do_cliente uuid,
-        id_do_servico uuid,
-        id_profissional uuid NOT NULL,
-        comeca_em timestamptz NOT NULL,
-        termina_em timestamptz NOT NULL,
-        preco_centavos integer,
-        metodo_de_pagamento text,
-        status text NOT NULL DEFAULT 'pending',
-        notas text,
-        fonte text,
-        criado_em timestamptz NOT NULL DEFAULT now(),
-        atualizado_em timestamptz NOT NULL DEFAULT now()
-      );
-      CREATE VIEW appointments AS
-        SELECT id, id_do_negocio AS business_id, id_do_cliente AS client_id, id_do_servico AS service_id,
-               id_profissional AS professional_id, comeca_em AS starts_at, termina_em AS ends_at, status
-        FROM agendamentos;`
+  test("na estrutura de produção, barra sobreposição ativa e libera cancelado/no-show", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await pg.exec(PRODUCTION_SHAPE)
+    await pg.exec(migrationSql())
+    const [b, p] = [crypto.randomUUID(), crypto.randomUUID()]
+    const insert = (start: string, end: string, status = "confirmed", professional = p) =>
+      pg.query("INSERT INTO appointments (business_id, professional_id, starts_at, ends_at, status) VALUES ($1, $2, $3, $4, $5)", [
+        b,
+        professional,
+        at(start).toISOString(),
+        at(end).toISOString(),
+        status,
+      ])
 
-    const insertViaView = (pg: PGlite, b: string, p: string, start: string, end: string, status = "confirmed") =>
-      pg.query(
-        "INSERT INTO appointments (business_id, professional_id, starts_at, ends_at, status) VALUES ($1, $2, $3, $4, $5)",
-        [b, p, at(start).toISOString(), at(end).toISOString(), status]
-      )
-
-    async function productionDb() {
-      const pg = new PGlite({ extensions: { btree_gist } })
-      await pg.exec(PRODUCTION_SHAPE)
-      return pg
-    }
-
-    test("cria a regra na tabela física e barra conflitos gravados pela view do app", async () => {
-      const pg = await productionDb()
-      const [b, p] = [crypto.randomUUID(), crypto.randomUUID()]
-      await insertViaView(pg, b, p, "09:00", "09:30")
-      await insertViaView(pg, b, p, "09:00", "09:30", "cancelled")
-
-      await pg.exec(migrationSql())
-      await pg.exec(migrationSql())
-
-      const constraint = await pg.query<{ tabela: string }>(
-        "SELECT conrelid::regclass::text AS tabela FROM pg_constraint WHERE conname = 'appointments_no_overlap'"
-      )
-      assert.deepEqual(constraint.rows, [{ tabela: "agendamentos" }])
-
-      await assert.rejects(insertViaView(pg, b, p, "09:15", "09:45"), (error: unknown) => {
-        assert.ok(isOverlapError(error), `esperava 23P01, recebeu ${String(error)}`)
-        return true
-      })
-      await insertViaView(pg, b, p, "09:30", "10:00")
-      await insertViaView(pg, b, p, "09:00", "09:30", "no_show")
-      await insertViaView(pg, b, crypto.randomUUID(), "09:00", "09:30")
-      const total = await pg.query<{ n: number }>("SELECT count(*)::int AS n FROM agendamentos")
-      assert.equal(total.rows[0].n, 5)
+    await insert("09:00", "09:30")
+    await assert.rejects(insert("09:15", "09:45", "pending"), (error: unknown) => {
+      assert.ok(isOverlapError(error), `esperava 23P01, recebeu ${String(error)}`)
+      return true
     })
+    await insert("09:30", "10:00")
+    await insert("09:00", "09:30", "cancelled")
+    await insert("09:00", "09:30", "no_show")
+    await insert("09:00", "09:30", "confirmed", crypto.randomUUID())
+    const total = await pg.query<{ n: number }>("SELECT count(*)::int AS n FROM appointments")
+    assert.equal(total.rows[0].n, 5)
+  })
 
-    test("aborta sem alterar nada se agendamentos já tiver conflitos", async () => {
-      const pg = await productionDb()
-      const [b, p] = [crypto.randomUUID(), crypto.randomUUID()]
-      await insertViaView(pg, b, p, "09:00", "09:30")
-      await insertViaView(pg, b, p, "09:10", "09:40", "in_progress")
-      await assert.rejects(pg.exec(migrationSql()), /1 par\(es\) de agendamentos já se sobrepõem/)
-      await pg.exec("ROLLBACK")
-      const constraint = await pg.query("SELECT 1 FROM pg_constraint WHERE conname = 'appointments_no_overlap'")
-      assert.equal(constraint.rows.length, 0)
-    })
+  test("aborta se appointments não existir", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await assert.rejects(pg.exec(migrationSql()), /public\.appointments não existe/)
+  })
 
-    test("aborta se houver status desconhecidos (não presume o significado)", async () => {
-      const pg = await productionDb()
-      await insertViaView(pg, crypto.randomUUID(), crypto.randomUUID(), "09:00", "09:30", "agendado")
-      await assert.rejects(pg.exec(migrationSql()), /status desconhecidos: agendado/)
-    })
-
-    test("aborta se a view mapear colunas de forma diferente da esperada", async () => {
-      const pg = new PGlite({ extensions: { btree_gist } })
-      await pg.exec(
-        PRODUCTION_SHAPE.replace("comeca_em AS starts_at, termina_em AS ends_at", "criado_em AS starts_at, termina_em AS ends_at")
-      )
-      await assert.rejects(pg.exec(migrationSql()), /não mapeia as colunas como esperado/)
-    })
+  test("aborta se appointments não for tabela física", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await pg.exec("CREATE TABLE base_real (id uuid); CREATE VIEW appointments AS SELECT * FROM base_real;")
+    await assert.rejects(pg.exec(migrationSql()), /não é uma tabela física/)
   })
 
   test("aborta se as colunas não forem as esperadas (não presume nomes)", async () => {
@@ -330,6 +296,38 @@ describe("script 016 em bancos existentes", () => {
     await pg.exec(
       "CREATE TABLE appointments (id uuid, id_do_negocio uuid, id_profissional uuid, comeca_em timestamptz, termina_em timestamptz, status text);"
     )
-    await assert.rejects(pg.exec(migrationSql()), /não tem as colunas esperadas: business_id uuid, professional_id uuid, starts_at/)
+    await assert.rejects(pg.exec(migrationSql()), /não tem as colunas esperadas: business_id \(esperado uuid, encontrado ausente\)/)
+  })
+
+  test("aborta se o tipo de uma coluna for diferente do esperado", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await pg.exec(PRODUCTION_SHAPE.replace("professional_id uuid NOT NULL", "professional_id text NOT NULL"))
+    await assert.rejects(pg.exec(migrationSql()), /professional_id \(esperado uuid, encontrado text\)/)
+    await pg.exec("ROLLBACK")
+    const ext = await pg.query("SELECT 1 FROM pg_extension WHERE extname = 'btree_gist'")
+    assert.equal(ext.rows.length, 0)
+  })
+
+  test("aborta se houver status desconhecidos (não presume o significado)", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await pg.exec(PRODUCTION_SHAPE)
+    await pg.query(
+      "INSERT INTO appointments (business_id, professional_id, starts_at, ends_at, status) VALUES ($1, $2, $3, $4, 'agendado')",
+      [crypto.randomUUID(), crypto.randomUUID(), at("09:00").toISOString(), at("09:30").toISOString()]
+    )
+    await assert.rejects(pg.exec(migrationSql()), /status desconhecidos: agendado/)
   })
 })
+
+const PRODUCTION_SHAPE = `
+  CREATE TABLE appointments (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    business_id uuid NOT NULL,
+    client_id uuid,
+    service_id uuid,
+    professional_id uuid NOT NULL,
+    starts_at timestamptz NOT NULL,
+    ends_at timestamptz NOT NULL,
+    status text NOT NULL DEFAULT 'pending',
+    created_at timestamptz NOT NULL DEFAULT now()
+  );`
