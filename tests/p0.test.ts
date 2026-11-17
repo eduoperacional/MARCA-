@@ -4,6 +4,7 @@ import path from "node:path"
 import { before, describe, test } from "node:test"
 
 import { PGlite } from "@electric-sql/pglite"
+import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist"
 import { eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 
@@ -21,7 +22,7 @@ let db: BillingDb
 let exec: QueryExec
 
 before(async () => {
-  pg = new PGlite()
+  pg = new PGlite({ extensions: { btree_gist } })
   await pg.exec(BASE_SQL)
   const dir = path.join(process.cwd(), "scripts")
   const templates = ["004-grant-owner-access.sql", "007-liberar-super-admin.sql"]
