@@ -291,18 +291,71 @@ describe("script 016 em bancos existentes", () => {
     await assert.rejects(pg.exec(migrationSql()), /não é uma tabela física/)
   })
 
-  test("aborta se as colunas não forem as esperadas (não presume nomes)", async () => {
+  test("com colunas em português, cria a regra com os nomes reais e barra sobreposição ativa", async () => {
     const pg = new PGlite({ extensions: { btree_gist } })
-    await pg.exec(
-      "CREATE TABLE appointments (id uuid, id_do_negocio uuid, id_profissional uuid, comeca_em timestamptz, termina_em timestamptz, status text);"
+    await pg.exec(PORTUGUESE_SHAPE)
+    await pg.exec(migrationSql())
+    await pg.exec(migrationSql())
+
+    const constraint = await pg.query<{ def: string }>(
+      "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'appointments_no_overlap'"
     )
-    await assert.rejects(pg.exec(migrationSql()), /não tem as colunas esperadas: business_id \(esperado uuid, encontrado ausente\)/)
+    assert.equal(constraint.rows.length, 1)
+    assert.match(constraint.rows[0].def, /id_do_negocio WITH =, id_profissional WITH =, tstzrange\(comeca_em, termina_em, '\[\)'::text\) WITH &&/)
+
+    const [b, p] = [crypto.randomUUID(), crypto.randomUUID()]
+    const insert = (start: string, end: string, status = "confirmed") =>
+      pg.query("INSERT INTO appointments (id_do_negocio, id_profissional, comeca_em, termina_em, status) VALUES ($1, $2, $3, $4, $5)", [
+        b,
+        p,
+        at(start).toISOString(),
+        at(end).toISOString(),
+        status,
+      ])
+    await insert("09:00", "09:30")
+    await assert.rejects(insert("09:15", "09:45", "in_progress"), (error: unknown) => {
+      assert.ok(isOverlapError(error), `esperava 23P01, recebeu ${String(error)}`)
+      return true
+    })
+    await insert("09:30", "10:00")
+    await insert("09:00", "09:30", "cancelled")
+    await insert("09:00", "09:30", "no_show")
+  })
+
+  test("com colunas em português, aborta se já houver conflito ativo", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await pg.exec(PORTUGUESE_SHAPE)
+    const [b, p] = [crypto.randomUUID(), crypto.randomUUID()]
+    for (const [start, end] of [["09:00", "09:30"], ["09:15", "09:45"]]) {
+      await pg.query("INSERT INTO appointments (id_do_negocio, id_profissional, comeca_em, termina_em, status) VALUES ($1, $2, $3, $4, 'confirmed')", [
+        b,
+        p,
+        at(start).toISOString(),
+        at(end).toISOString(),
+      ])
+    }
+    await assert.rejects(pg.exec(migrationSql()), /1 par\(es\) de agendamentos ativos já se sobrepõem/)
+    await pg.exec("ROLLBACK")
+    const constraint = await pg.query("SELECT 1 FROM pg_constraint WHERE conname = 'appointments_no_overlap'")
+    assert.equal(constraint.rows.length, 0)
+  })
+
+  test("aborta se uma coluna necessária não existir em nenhum dos nomes (não presume nomes)", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await pg.exec("CREATE TABLE appointments (id uuid, negocio uuid, id_profissional uuid, comeca_em timestamptz, termina_em timestamptz, status text);")
+    await assert.rejects(pg.exec(migrationSql()), /Coluna de estabelecimento não encontrada .*id_do_negocio ou business_id/)
+  })
+
+  test("aborta se houver duas colunas candidatas para o mesmo papel", async () => {
+    const pg = new PGlite({ extensions: { btree_gist } })
+    await pg.exec(PRODUCTION_SHAPE.replace("professional_id uuid NOT NULL,", "professional_id uuid NOT NULL, id_profissional uuid,"))
+    await assert.rejects(pg.exec(migrationSql()), /Ambíguo: .*profissional \(professional_id, id_profissional\)|Ambíguo: .*profissional \(id_profissional, professional_id\)/)
   })
 
   test("aborta se o tipo de uma coluna for diferente do esperado", async () => {
     const pg = new PGlite({ extensions: { btree_gist } })
     await pg.exec(PRODUCTION_SHAPE.replace("professional_id uuid NOT NULL", "professional_id text NOT NULL"))
-    await assert.rejects(pg.exec(migrationSql()), /professional_id \(esperado uuid, encontrado text\)/)
+    await assert.rejects(pg.exec(migrationSql()), /Coluna professional_id deveria ser uuid, encontrado text/)
     await pg.exec("ROLLBACK")
     const ext = await pg.query("SELECT 1 FROM pg_extension WHERE extname = 'btree_gist'")
     assert.equal(ext.rows.length, 0)
@@ -330,4 +383,21 @@ const PRODUCTION_SHAPE = `
     ends_at timestamptz NOT NULL,
     status text NOT NULL DEFAULT 'pending',
     created_at timestamptz NOT NULL DEFAULT now()
+  );`
+
+const PORTUGUESE_SHAPE = `
+  CREATE TABLE appointments (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    id_do_negocio uuid NOT NULL,
+    id_do_cliente uuid,
+    id_do_servico uuid,
+    id_profissional uuid NOT NULL,
+    comeca_em timestamptz NOT NULL,
+    termina_em timestamptz NOT NULL,
+    preco_centavos integer NOT NULL DEFAULT 0,
+    status text NOT NULL DEFAULT 'pending',
+    notas text,
+    fonte text,
+    criado_em timestamptz NOT NULL DEFAULT now(),
+    atualizado_em timestamptz NOT NULL DEFAULT now()
   );`

@@ -5,9 +5,15 @@
 -- (nem a extensão, nem a constraint). Em clientes que mantêm a sessão aberta (psql, DBeaver),
 -- execute ROLLBACK; após um aborto antes de tentar de novo.
 --
--- Colunas exigidas em public.appointments (lib/db/schema.ts), conferidas antes de criar a regra:
---   business_id uuid, professional_id uuid, starts_at e ends_at timestamptz (ou timestamp, ambas iguais),
---   status text ou varchar
+-- Nomes de colunas: o script NÃO presume os nomes. Para cada papel, procura no catálogo do banco
+-- exatamente uma das colunas abaixo e usa a que existir de fato. Se nenhuma existir, ou se as duas
+-- existirem, aborta sem alterar nada.
+--   estabelecimento : id_do_negocio   ou business_id      (uuid)
+--   profissional    : id_profissional ou professional_id  (uuid)
+--   início          : comeca_em       ou starts_at        (timestamptz ou timestamp)
+--   término         : termina_em      ou ends_at          (mesmo tipo do início)
+--   status          : status                               (text ou varchar)
+--   chave           : id                                   (uuid)
 --
 -- Status que ocupam o horário (lib/appointment-status.ts → ACTIVE_STATUSES):
 --   pending, confirmed, in_progress, completed
@@ -15,11 +21,15 @@
 -- Intervalo semiaberto [início, fim): 09:00–09:30 e 09:30–10:00 NÃO conflitam.
 
 /* ---------------------------------------------------------------------------
-   PASSO 0 · Diagnóstico (somente leitura). Opcional; rode antes, separadamente, se quiser conferir.
+   PASSO 0 · Diagnóstico (somente leitura). Opcional; rode antes, separadamente.
+   Desative a tradução automática do navegador antes de ler o resultado: ela traduz
+   nomes de colunas na tela (ex.: business_id → id_do_negocio). A coluna nome_hex
+   não é traduzida e mostra o nome real byte a byte.
    ---------------------------------------------------------------------------
 
 -- 0.1 Colunas e tipos reais:
-SELECT column_name, data_type, udt_name, is_nullable
+SELECT column_name, encode(convert_to(column_name, 'UTF8'), 'hex') AS nome_hex,
+       data_type, udt_name, is_nullable
 FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = 'appointments'
 ORDER BY ordinal_position;
@@ -33,20 +43,7 @@ SELECT conname, contype, pg_get_constraintdef(oid) FROM pg_constraint WHERE conr
 -- 0.4 Status existentes:
 SELECT status, count(*) FROM public.appointments GROUP BY status ORDER BY status;
 
--- 0.5 Conflitos já existentes entre agendamentos que ocupam horário:
-SELECT a.business_id, a.professional_id,
-       a.id AS agendamento_a, a.starts_at AS inicio_a, a.ends_at AS fim_a, a.status AS status_a,
-       b.id AS agendamento_b, b.starts_at AS inicio_b, b.ends_at AS fim_b, b.status AS status_b
-FROM public.appointments a
-JOIN public.appointments b
-  ON b.business_id = a.business_id
- AND b.professional_id = a.professional_id
- AND a.id < b.id
- AND a.starts_at < b.ends_at
- AND b.starts_at < a.ends_at
-WHERE a.status IN ('pending', 'confirmed', 'in_progress', 'completed')
-  AND b.status IN ('pending', 'confirmed', 'in_progress', 'completed')
-ORDER BY a.business_id, a.professional_id, a.starts_at;
+-- Conflitos já existentes são contados pelo próprio script (passo 1), com os nomes reais.
 --------------------------------------------------------------------------- */
 
 BEGIN;
@@ -54,17 +51,29 @@ BEGIN;
 -- Não espera indefinidamente por locks: se a tabela estiver ocupada, falha e pode ser repetido.
 SET LOCAL lock_timeout = '5s';
 
--- 1) Verificações. Qualquer falha aborta a transação inteira.
 DO $$
 DECLARE
   app_kind         "char";
-  wrong_cols       text;
-  start_type       text;
-  end_type         text;
+  col_business     text;
+  col_professional text;
+  col_start        text;
+  col_end          text;
+  type_business    text;
+  type_professional text;
+  type_start       text;
+  type_end         text;
+  type_status      text;
+  type_id          text;
+  role_label       text;
+  candidates       text[];
+  found            text[];
+  range_fn         text;
   unknown_statuses text;
   invalid_count    bigint;
   overlap_count    bigint;
+  active_filter    constant text := $q$status IN ('pending', 'confirmed', 'in_progress', 'completed')$q$;
 BEGIN
+  /* 1.1 A tabela existe e é física */
   SELECT c.relkind INTO app_kind
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname = 'public' AND c.relname = 'appointments';
@@ -75,72 +84,107 @@ BEGIN
     RAISE EXCEPTION 'public.appointments não é uma tabela física (relkind = %). Nada foi alterado.', app_kind;
   END IF;
 
-  SELECT string_agg(
-           expected.col || ' (esperado ' || expected.label || ', encontrado ' || coalesce(c.data_type, 'ausente') || ')',
-           ', ' ORDER BY expected.ord)
-  INTO wrong_cols
-  FROM (VALUES
-    (1, 'business_id',     'uuid',        ARRAY['uuid']),
-    (2, 'professional_id', 'uuid',        ARRAY['uuid']),
-    (3, 'starts_at',       'timestamptz', ARRAY['timestamp with time zone', 'timestamp without time zone']),
-    (4, 'ends_at',         'timestamptz', ARRAY['timestamp with time zone', 'timestamp without time zone']),
-    (5, 'status',          'text',        ARRAY['text', 'character varying']),
-    (6, 'id',              'uuid',        ARRAY['uuid'])
-  ) AS expected(ord, col, label, accepted)
-  LEFT JOIN information_schema.columns c
-    ON c.table_schema = 'public' AND c.table_name = 'appointments' AND c.column_name = expected.col
-  WHERE c.data_type IS NULL OR NOT (c.data_type = ANY (expected.accepted));
+  /* 1.2 Resolve o nome real de cada coluna (exatamente um candidato deve existir) */
+  FOR role_label, candidates IN
+    SELECT * FROM (VALUES
+      ('estabelecimento', ARRAY['id_do_negocio', 'business_id']),
+      ('profissional',    ARRAY['id_profissional', 'professional_id']),
+      ('início',          ARRAY['comeca_em', 'starts_at']),
+      ('término',         ARRAY['termina_em', 'ends_at'])
+    ) AS r(label, names)
+  LOOP
+    SELECT array_agg(a.attname::text ORDER BY a.attnum) INTO found
+    FROM pg_attribute a
+    WHERE a.attrelid = 'public.appointments'::regclass
+      AND a.attnum > 0 AND NOT a.attisdropped
+      AND a.attname = ANY (candidates);
 
-  IF wrong_cols IS NOT NULL THEN
-    RAISE EXCEPTION 'public.appointments não tem as colunas esperadas: %. Nada foi alterado. Veja o passo 0.1.', wrong_cols;
+    IF found IS NULL THEN
+      RAISE EXCEPTION 'Coluna de % não encontrada em public.appointments (procurado: %). Nada foi alterado. Veja o passo 0.1.',
+        role_label, array_to_string(candidates, ' ou ');
+    ELSIF cardinality(found) > 1 THEN
+      RAISE EXCEPTION 'Ambíguo: public.appointments tem mais de uma coluna de % (%). Nada foi alterado.',
+        role_label, array_to_string(found, ', ');
+    END IF;
+
+    CASE role_label
+      WHEN 'estabelecimento' THEN col_business     := found[1];
+      WHEN 'profissional'    THEN col_professional := found[1];
+      WHEN 'início'          THEN col_start        := found[1];
+      WHEN 'término'         THEN col_end          := found[1];
+    END CASE;
+  END LOOP;
+
+  /* 1.3 Confere os tipos reais */
+  SELECT max(data_type) FILTER (WHERE column_name = col_business),
+         max(data_type) FILTER (WHERE column_name = col_professional),
+         max(data_type) FILTER (WHERE column_name = col_start),
+         max(data_type) FILTER (WHERE column_name = col_end),
+         max(data_type) FILTER (WHERE column_name = 'status'),
+         max(data_type) FILTER (WHERE column_name = 'id')
+  INTO type_business, type_professional, type_start, type_end, type_status, type_id
+  FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'appointments';
+
+  IF type_business IS DISTINCT FROM 'uuid' THEN
+    RAISE EXCEPTION 'Coluna % deveria ser uuid, encontrado %. Nada foi alterado.', col_business, coalesce(type_business, 'ausente');
+  END IF;
+  IF type_professional IS DISTINCT FROM 'uuid' THEN
+    RAISE EXCEPTION 'Coluna % deveria ser uuid, encontrado %. Nada foi alterado.', col_professional, coalesce(type_professional, 'ausente');
+  END IF;
+  IF type_id IS DISTINCT FROM 'uuid' THEN
+    RAISE EXCEPTION 'Coluna id deveria ser uuid, encontrado %. Nada foi alterado.', coalesce(type_id, 'ausente');
+  END IF;
+  IF type_start IS NULL OR type_start NOT IN ('timestamp with time zone', 'timestamp without time zone') THEN
+    RAISE EXCEPTION 'Coluna % deveria ser timestamptz ou timestamp, encontrado %. Nada foi alterado.', col_start, coalesce(type_start, 'ausente');
+  END IF;
+  IF type_end IS DISTINCT FROM type_start THEN
+    RAISE EXCEPTION 'Colunas % (%) e % (%) têm tipos diferentes. Nada foi alterado.', col_start, type_start, col_end, coalesce(type_end, 'ausente');
+  END IF;
+  IF type_status IS NULL OR type_status NOT IN ('text', 'character varying') THEN
+    RAISE EXCEPTION 'Coluna status deveria ser text ou varchar, encontrado %. Nada foi alterado.', coalesce(type_status, 'ausente');
   END IF;
 
-  SELECT data_type INTO start_type FROM information_schema.columns
-  WHERE table_schema = 'public' AND table_name = 'appointments' AND column_name = 'starts_at';
-  SELECT data_type INTO end_type FROM information_schema.columns
-  WHERE table_schema = 'public' AND table_name = 'appointments' AND column_name = 'ends_at';
-  IF start_type <> end_type THEN
-    RAISE EXCEPTION 'starts_at (%) e ends_at (%) têm tipos diferentes. Nada foi alterado.', start_type, end_type;
-  END IF;
-
-  SELECT string_agg(DISTINCT coalesce(status::text, 'NULL'), ', ') INTO unknown_statuses
-  FROM public.appointments
-  WHERE status IS NULL
-     OR status::text NOT IN ('pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show');
+  /* 1.4 Dados existentes compatíveis com a regra */
+  EXECUTE $q$
+    SELECT string_agg(DISTINCT coalesce(status::text, 'NULL'), ', ')
+    FROM public.appointments
+    WHERE status IS NULL
+       OR status::text NOT IN ('pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show')
+  $q$ INTO unknown_statuses;
   IF unknown_statuses IS NOT NULL THEN
     RAISE EXCEPTION 'public.appointments tem status desconhecidos: %. Nada foi alterado. Veja o passo 0.4.', unknown_statuses;
   END IF;
 
-  SELECT count(*) INTO invalid_count
-  FROM public.appointments
-  WHERE ends_at < starts_at AND status IN ('pending', 'confirmed', 'in_progress', 'completed');
+  EXECUTE format(
+    'SELECT count(*) FROM public.appointments WHERE %2$I < %1$I AND ' || active_filter,
+    col_start, col_end
+  ) INTO invalid_count;
   IF invalid_count > 0 THEN
     RAISE EXCEPTION '% agendamento(s) ativo(s) com término antes do início. Nada foi alterado.', invalid_count;
   END IF;
 
-  SELECT count(*) INTO overlap_count
-  FROM public.appointments a
-  JOIN public.appointments b
-    ON b.business_id = a.business_id
-   AND b.professional_id = a.professional_id
-   AND a.id < b.id
-   AND a.starts_at < b.ends_at
-   AND b.starts_at < a.ends_at
-  WHERE a.status IN ('pending', 'confirmed', 'in_progress', 'completed')
-    AND b.status IN ('pending', 'confirmed', 'in_progress', 'completed');
+  EXECUTE format(
+    $q$SELECT count(*)
+       FROM public.appointments a
+       JOIN public.appointments b
+         ON b.%1$I = a.%1$I
+        AND b.%2$I = a.%2$I
+        AND a.id < b.id
+        AND a.%3$I < b.%4$I
+        AND b.%3$I < a.%4$I
+       WHERE a.status IN ('pending', 'confirmed', 'in_progress', 'completed')
+         AND b.status IN ('pending', 'confirmed', 'in_progress', 'completed')$q$,
+    col_business, col_professional, col_start, col_end
+  ) INTO overlap_count;
   IF overlap_count > 0 THEN
-    RAISE EXCEPTION '% par(es) de agendamentos já se sobrepõem. Nada foi alterado. Liste com o passo 0.5, resolva (cancelar ou remarcar) e rode de novo.', overlap_count;
+    RAISE EXCEPTION '% par(es) de agendamentos ativos já se sobrepõem. Nada foi alterado. Resolva (cancelar ou remarcar) e rode de novo.', overlap_count;
   END IF;
-END $$;
 
--- 2) Necessária para combinar igualdade de uuid com sobreposição de intervalo no mesmo índice GiST.
-CREATE EXTENSION IF NOT EXISTS btree_gist;
+  /* 2) Extensão necessária para combinar igualdade de uuid com sobreposição de intervalo no GiST */
+  EXECUTE 'CREATE EXTENSION IF NOT EXISTS btree_gist';
 
--- 3) Regra de exclusão (criada uma única vez).
-DO $$
-DECLARE
-  range_fn text;
-BEGIN
+  /* 3) Regra de exclusão (criada uma única vez) */
   IF EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'appointments_no_overlap' AND conrelid = 'public.appointments'::regclass
@@ -149,22 +193,28 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT CASE data_type WHEN 'timestamp with time zone' THEN 'tstzrange' ELSE 'tsrange' END INTO range_fn
-  FROM information_schema.columns
-  WHERE table_schema = 'public' AND table_name = 'appointments' AND column_name = 'starts_at';
+  range_fn := CASE type_start WHEN 'timestamp with time zone' THEN 'tstzrange' ELSE 'tsrange' END;
 
   EXECUTE format(
     $f$ALTER TABLE public.appointments
          ADD CONSTRAINT appointments_no_overlap
          EXCLUDE USING gist (
-           business_id WITH =,
-           professional_id WITH =,
-           %s(starts_at, ends_at, '[)') WITH &&
+           %1$I WITH =,
+           %2$I WITH =,
+           %5$s(%3$I, %4$I, '[)') WITH &&
          )
          WHERE (status IN ('pending', 'confirmed', 'in_progress', 'completed'))$f$,
-    range_fn
+    col_business, col_professional, col_start, col_end, range_fn
   );
-  RAISE NOTICE 'Constraint appointments_no_overlap criada em public.appointments.';
+
+  RAISE NOTICE 'Constraint appointments_no_overlap criada em public.appointments usando %, %, %(%, %).',
+    col_business, col_professional, range_fn, col_start, col_end;
+
+  IF col_business <> 'business_id' OR col_professional <> 'professional_id'
+     OR col_start <> 'starts_at' OR col_end <> 'ends_at' THEN
+    RAISE WARNING 'A aplicação (lib/db/schema.ts) lê e grava business_id, professional_id, starts_at e ends_at. Com as colunas atuais (%, %, %, %), as consultas da aplicação a public.appointments não funcionam.',
+      col_business, col_professional, col_start, col_end;
+  END IF;
 END $$;
 
 COMMIT;
