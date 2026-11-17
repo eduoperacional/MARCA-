@@ -7,6 +7,7 @@ import { cleanText, fail, isOverlapError, isTime, isUuid, toCents } from "@/lib/
 import { STATUS_TRANSITIONS, PAYMENT_METHODS } from "@/lib/appointment-status"
 import { notify } from "@/lib/automations"
 import { validateSlot } from "@/lib/availability"
+import { BLOCKING_STATUSES, reserveSlot, type BookingTx } from "@/lib/booking-core"
 import { authorize, NO_PERMISSION } from "@/lib/business"
 import { db } from "@/lib/db"
 import { appointments, clients, payments, professionalServices, professionals, services } from "@/lib/db/schema"
@@ -124,37 +125,44 @@ export async function saveAppointment(input: AppointmentInput) {
     notes: cleanText(input.notes, 1000),
   }
 
-  try {
-    if (existing) {
-      await db
-        .update(appointments)
-        .set({ ...values, updatedAt: new Date() })
-        .where(and(eq(appointments.id, existing.id), eq(appointments.businessId, business.id)))
-      if (existing.startsAt.getTime() !== startsAt.getTime() || existing.professionalId !== professional.id) {
-        await notify({
-          businessId: business.id,
-          type: "appointment_rescheduled",
-          title: "Agendamento reagendado",
-          body: `${service.name} com ${professional.name} em ${input.date.split("-").reverse().join("/")} às ${input.start}`,
-          appointmentId: existing.id,
-        })
+  const reserved = await reserveSlot(
+    db,
+    { businessId: business.id, professionalId: professional.id, startsAt, endsAt, excludeAppointmentId: existing?.id },
+    async (tx) => {
+      if (existing) {
+        await tx
+          .update(appointments)
+          .set({ ...values, updatedAt: new Date() })
+          .where(and(eq(appointments.id, existing.id), eq(appointments.businessId, business.id)))
+        return existing.id
       }
-    } else {
-      const [created] = await db
+      const [created] = await tx
         .insert(appointments)
         .values({ ...values, businessId: business.id, status: "confirmed", source: "admin" })
         .returning({ id: appointments.id })
+      return created.id
+    }
+  )
+  if (!reserved.ok) return fail(`${professional.name} já possui um agendamento ou bloqueio neste horário.`)
+
+  if (existing) {
+    if (existing.startsAt.getTime() !== startsAt.getTime() || existing.professionalId !== professional.id) {
       await notify({
         businessId: business.id,
-        type: "appointment_created",
-        title: "Novo agendamento",
+        type: "appointment_rescheduled",
+        title: "Agendamento reagendado",
         body: `${service.name} com ${professional.name} em ${input.date.split("-").reverse().join("/")} às ${input.start}`,
-        appointmentId: created.id,
+        appointmentId: existing.id,
       })
     }
-  } catch (error) {
-    if (isOverlapError(error)) return fail(`${professional.name} já possui um agendamento neste horário.`)
-    throw error
+  } else {
+    await notify({
+      businessId: business.id,
+      type: "appointment_created",
+      title: "Novo agendamento",
+      body: `${service.name} com ${professional.name} em ${input.date.split("-").reverse().join("/")} às ${input.start}`,
+      appointmentId: reserved.value,
+    })
   }
 
   revalidatePath("/", "layout")
@@ -206,24 +214,42 @@ export async function updateAppointmentStatus(
     if (!paymentCents) return fail("Informe um valor de pagamento válido.")
   }
 
-  try {
-    await db.transaction(async (tx) => {
-      await tx
-        .update(appointments)
-        .set({ status, updatedAt: new Date(), ...(payment ? { paymentMethod: payment.method } : {}) })
-        .where(and(eq(appointments.id, id), eq(appointments.businessId, business.id)))
-      if (payment && paymentCents) {
-        await tx.insert(payments).values({
-          businessId: business.id,
-          appointmentId: id,
-          amountCents: paymentCents,
-          method: payment.method,
-        })
-      }
-    })
-  } catch (error) {
-    if (isOverlapError(error)) return fail("O horário já foi ocupado por outro agendamento.")
-    throw error
+  const writeStatus = async (tx: BookingTx) => {
+    await tx
+      .update(appointments)
+      .set({ status, updatedAt: new Date(), ...(payment ? { paymentMethod: payment.method } : {}) })
+      .where(and(eq(appointments.id, id), eq(appointments.businessId, business.id)))
+    if (payment && paymentCents) {
+      await tx.insert(payments).values({
+        businessId: business.id,
+        appointmentId: id,
+        amountCents: paymentCents,
+        method: payment.method,
+      })
+    }
+  }
+
+  const reopening = BLOCKING_STATUSES.includes(status) && !BLOCKING_STATUSES.includes(appointment.status)
+  if (reopening) {
+    const reserved = await reserveSlot(
+      db,
+      {
+        businessId: business.id,
+        professionalId: appointment.professionalId,
+        startsAt: appointment.startsAt,
+        endsAt: appointment.endsAt,
+        excludeAppointmentId: appointment.id,
+      },
+      writeStatus
+    )
+    if (!reserved.ok) return fail("O horário já foi ocupado por outro agendamento.")
+  } else {
+    try {
+      await db.transaction(writeStatus)
+    } catch (error) {
+      if (isOverlapError(error)) return fail("O horário já foi ocupado por outro agendamento.")
+      throw error
+    }
   }
 
   if (status === "cancelled") {

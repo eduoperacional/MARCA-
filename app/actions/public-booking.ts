@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache"
 import { and, eq } from "drizzle-orm"
 
-import { cleanText, fail, isOverlapError, isTime, isUuid } from "@/lib/actions/result"
+import { cleanText, fail, isTime, isUuid } from "@/lib/actions/result"
 import { notify } from "@/lib/automations"
 import { getAvailableSlots } from "@/lib/availability"
+import { reserveWithAnyProfessional } from "@/lib/booking-core"
 import { allowBookingForPhone, allowBookingFromIp, isPublicBookingBlocked } from "@/lib/booking-guard"
 import { getBusinessBySlug } from "@/lib/business"
 import { db } from "@/lib/db"
@@ -70,9 +71,12 @@ export async function createPublicBooking(input: {
   const startsAt = toInstant(input.date, input.start)
   const endsAt = new Date(startsAt.getTime() + service.durationMin * 60_000)
 
-  for (const professionalId of slot.professionalIds) {
-    try {
-      const [created] = await db
+  const reserved = await reserveWithAnyProfessional(
+    db,
+    slot.professionalIds,
+    { businessId: business.id, startsAt, endsAt },
+    async (tx, professionalId) => {
+      const [created] = await tx
         .insert(appointments)
         .values({
           businessId: business.id,
@@ -87,27 +91,26 @@ export async function createPublicBooking(input: {
           notes: cleanText(input.notes, 500),
         })
         .returning({ id: appointments.id })
-
-      const [professional] = await db
-        .select({ name: professionals.name })
-        .from(professionals)
-        .where(eq(professionals.id, professionalId))
-
-      await notify({
-        businessId: business.id,
-        type: "online_booking",
-        title: "Novo agendamento online",
-        body: `${name} agendou ${service.name} com ${professional?.name ?? "profissional"} em ${input.date.split("-").reverse().join("/")} às ${input.start}`,
-        appointmentId: created.id,
-      })
-      revalidatePath("/", "layout")
-      return {
-        ok: true as const,
-        data: { professionalName: professional?.name ?? "", serviceName: service.name, date: input.date, start: input.start },
-      }
-    } catch (error) {
-      if (!isOverlapError(error)) throw error
+      return created.id
     }
+  )
+  if (!reserved.ok) return fail("Este horário acabou de ser ocupado. Escolha outro, por favor.")
+
+  const [professional] = await db
+    .select({ name: professionals.name })
+    .from(professionals)
+    .where(eq(professionals.id, reserved.professionalId))
+
+  await notify({
+    businessId: business.id,
+    type: "online_booking",
+    title: "Novo agendamento online",
+    body: `${name} agendou ${service.name} com ${professional?.name ?? "profissional"} em ${input.date.split("-").reverse().join("/")} às ${input.start}`,
+    appointmentId: reserved.value,
+  })
+  revalidatePath("/", "layout")
+  return {
+    ok: true as const,
+    data: { professionalName: professional?.name ?? "", serviceName: service.name, date: input.date, start: input.start },
   }
-  return fail("Este horário acabou de ser ocupado. Escolha outro, por favor.")
 }
