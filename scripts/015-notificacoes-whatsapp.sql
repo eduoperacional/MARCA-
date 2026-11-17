@@ -31,10 +31,12 @@ CREATE TABLE IF NOT EXISTS business_whatsapp_settings (
 ALTER TABLE business_whatsapp_settings ADD COLUMN IF NOT EXISTS consent_at timestamptz;
 ALTER TABLE business_whatsapp_settings ALTER COLUMN enabled SET DEFAULT false;
 
--- Remove linhas criadas pela cópia automática de businesses.phone na versão anterior
--- (nunca editadas nem testadas pelo proprietário).
-DELETE FROM business_whatsapp_settings s
-USING businesses b
+-- Neutraliza (sem apagar) linhas criadas pela cópia automática de businesses.phone na versão
+-- anterior, nunca editadas nem testadas pelo proprietário: desativa e limpa o telefone.
+-- A linha e o histórico em whatsapp_deliveries são preservados.
+UPDATE business_whatsapp_settings s
+SET enabled = false, phone = NULL, updated_at = now()
+FROM businesses b
 WHERE b.id = s.business_id
   AND s.consent_at IS NULL
   AND s.last_test_at IS NULL
@@ -86,7 +88,7 @@ CREATE TABLE IF NOT EXISTS whatsapp_deliveries (
   attempts            integer NOT NULL DEFAULT 0,
   max_attempts        integer NOT NULL DEFAULT 5,
   next_attempt_at     timestamptz NOT NULL DEFAULT now(),
-  expires_at          timestamptz NOT NULL DEFAULT (now() + interval '24 hours'),
+  expires_at          timestamptz NOT NULL DEFAULT (now() + interval '7 days'),
   locked_until        timestamptz,
   last_attempt_at     timestamptz,
   sent_at             timestamptz,
@@ -102,12 +104,20 @@ ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS dedupe_key      text;
 ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS attempts        integer NOT NULL DEFAULT 0;
 ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS max_attempts    integer NOT NULL DEFAULT 5;
 ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz NOT NULL DEFAULT now();
-ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS expires_at      timestamptz NOT NULL DEFAULT (now() + interval '24 hours');
+ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS expires_at      timestamptz NOT NULL DEFAULT (now() + interval '7 days');
 ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS locked_until    timestamptz;
 ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS last_attempt_at timestamptz;
 ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS sent_at         timestamptz;
 ALTER TABLE whatsapp_deliveries ADD COLUMN IF NOT EXISTS updated_at      timestamptz NOT NULL DEFAULT now();
 ALTER TABLE whatsapp_deliveries ALTER COLUMN status SET DEFAULT 'pending';
+ALTER TABLE whatsapp_deliveries ALTER COLUMN expires_at SET DEFAULT (now() + interval '7 days');
+
+-- Pendências criadas com a validade antiga (24 h) passam a valer 7 dias a partir da criação,
+-- para não expirarem antes das tentativas diárias do cron.
+UPDATE whatsapp_deliveries
+SET expires_at = created_at + interval '7 days', updated_at = now()
+WHERE status IN ('pending', 'processing')
+  AND expires_at < created_at + interval '7 days';
 
 DO $$
 BEGIN

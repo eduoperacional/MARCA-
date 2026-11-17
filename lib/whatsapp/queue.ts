@@ -12,11 +12,16 @@ export type SendResult =
   | { ok: true; messageId: string | null }
   | { ok: false; reason: "not_configured" | "provider_error" | "network_error"; error: string; retryable: boolean }
 
+/** 1 tentativa imediata + até 4 tentativas nas execuções diárias do cron (Vercel Hobby). */
 export const MAX_ATTEMPTS = 5
-/** Espera antes da 2ª, 3ª, 4ª e 5ª tentativa. */
-export const RETRY_DELAYS_MIN = [1, 5, 15, 60] as const
-/** Um aviso que não saiu em 24 h deixa de ser útil e é encerrado como falha. */
-export const DELIVERY_TTL_MS = 24 * 60 * 60_000
+/**
+ * Espera mínima antes de cada nova tentativa. Fica abaixo de 24 h para que a pendência já esteja
+ * elegível na próxima execução diária do cron, mesmo com a variação de horário do plano Hobby.
+ */
+export const RETRY_DELAY_HOURS = 20
+/** Prazo de validade de um aviso pendente: cobre todas as tentativas diárias com folga. */
+export const DELIVERY_TTL_DAYS = 7
+export const DELIVERY_TTL_MS = DELIVERY_TTL_DAYS * 24 * 60 * 60_000
 /** Uma linha em "processing" com o bloqueio vencido volta a ser elegível (processo interrompido). */
 export const LOCK_MS = 2 * 60_000
 
@@ -132,10 +137,9 @@ export function templateParams(snapshot: AppointmentSnapshot, formatWhen: (insta
   ]
 }
 
-/** Atraso antes da próxima tentativa, dado quantas já foram feitas (backoff progressivo). */
-export function retryDelayMs(attemptsMade: number) {
-  const index = Math.min(Math.max(attemptsMade, 1), RETRY_DELAYS_MIN.length) - 1
-  return RETRY_DELAYS_MIN[index] * 60_000
+/** Atraso antes da próxima tentativa. Fixo porque o cron só roda uma vez por dia. */
+export function retryDelayMs(_attemptsMade?: number) {
+  return RETRY_DELAY_HOURS * 60 * 60_000
 }
 
 /** Códigos da Cloud API que indicam falha temporária (limite, indisponibilidade). */
@@ -200,7 +204,7 @@ export async function processDelivery(deps: QueueDeps, row: ClaimedDelivery): Pr
   const { store } = deps
 
   if (now.getTime() > row.expiresAt.getTime()) {
-    await store.markFailed(row.id, "expired: aviso não entregue dentro de 24 horas", now)
+    await store.markFailed(row.id, `expired: aviso não entregue dentro de ${DELIVERY_TTL_DAYS} dias`, now)
     return "failed"
   }
   if (row.attempts > row.maxAttempts) {

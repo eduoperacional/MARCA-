@@ -9,6 +9,13 @@ O proprietário recebe no próprio WhatsApp os avisos de **novo agendamento**, *
 
 Todas as consultas filtram por `business_id` do estabelecimento ativo da sessão.
 
+O script é idempotente e **não apaga registros**. Na atualização a partir da versão anterior:
+
+- Configurações criadas pela cópia automática de `businesses.phone` (nunca editadas nem testadas) são desativadas e têm o telefone limpo por `UPDATE`; a linha é preservada.
+- Configurações sem `consent_at` são desativadas.
+- Pendências antigas com validade de 24 h passam a valer 7 dias a partir da criação.
+- O histórico em `whatsapp_deliveries` é mantido integralmente.
+
 ## Consentimento
 
 - Nenhum número é copiado de `businesses.phone`.
@@ -23,14 +30,29 @@ Uma única função, `normalizeWhatsappPhone` (`lib/phone.ts`), é usada no onbo
 
 ## Fila, tentativas e idempotência
 
-1. Quando ocorre o evento, o aviso é gravado em `whatsapp_deliveries` com status `pending`, **antes** de qualquer chamada à Meta.
-2. Logo após a resposta da requisição (`after()`), o sistema tenta enviar esse aviso.
-3. O cron `/api/cron/whatsapp` (a cada 5 minutos, protegido por `CRON_SECRET`) reprocessa o que ficou pendente. A entrega não depende de `after()`.
-4. A reserva usa `FOR UPDATE SKIP LOCKED` e um bloqueio de 2 minutos: dois processos nunca enviam a mesma linha, e uma linha interrompida no meio volta a ser elegível.
-5. Falhas temporárias (HTTP 408/429/5xx, limites da Meta, erros de rede) ganham nova tentativa com backoff progressivo: 1, 5, 15 e 60 minutos. O limite é de 5 tentativas.
-6. Falhas permanentes (template não aprovado, número inválido, credencial inválida) vão direto para `failed`.
-7. Um aviso que não saiu em 24 horas é encerrado como `failed`.
-8. O proprietário pode reenviar uma falha em **Configurações > Notificações**.
+O projeto está no **Vercel Hobby**, que só permite cron **uma vez por dia** e pode executá-lo em qualquer momento dentro da hora agendada. Por isso o envio normal é imediato, e o cron serve apenas para recuperação.
+
+1. Quando ocorre o evento (criar, cancelar ou reagendar), o aviso é gravado em `whatsapp_deliveries` com status `pending`, **antes** de qualquer chamada à Meta.
+2. **Envio imediato:** logo após a resposta da requisição (`after()`), o sistema reserva essa linha pelo id e chama a Meta Cloud API. No caso comum, o proprietário recebe o aviso em segundos, sem depender do cron.
+3. **Recuperação diária:** o cron `/api/cron/whatsapp` roda uma vez por dia (`0 12 * * *`, 12:00 UTC = 09:00 em Brasília, com variação de até 1 hora no Hobby), protegido por `CRON_SECRET`. Ele processa, em lotes de 50 por até 45 segundos, as pendências de falhas temporárias e as entregas interrompidas.
+4. **Tentativas:** 1 imediata + até 4 nas execuções diárias do cron (5 no total). Após uma falha temporária (HTTP 408/429/5xx, limites da Meta, erros de rede), a próxima tentativa fica elegível depois de 20 horas, valor abaixo de 24 h para que a pendência já esteja pronta na execução seguinte do cron. Não há novas tentativas em minutos.
+5. Falhas permanentes (template não aprovado, número inválido, credencial inválida) vão direto para `failed`.
+6. **Validade:** um aviso pendente expira em **7 dias**, prazo que cobre todas as tentativas diárias. Ao expirar, é encerrado como `failed`.
+7. O proprietário pode reenviar uma falha em **Configurações > Notificações**. O reenvio volta a linha para `pending` e ela é tentada na próxima execução do cron.
+
+**Prevenção de duplicidade entre envio imediato e cron:**
+
+- A reserva é um `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)` que muda o status para `processing` e define um bloqueio de 2 minutos. Se o envio imediato e o cron disputarem a mesma linha, apenas um a reserva; o outro a ignora.
+- Só são elegíveis linhas `pending` com `next_attempt_at` vencido, ou `processing` com o bloqueio expirado (processo interrompido). Linhas `sent`, `failed` e `skipped` nunca são reenviadas automaticamente.
+- `markSent` só altera linhas ainda em `processing`.
+- A chave de idempotência impede gravar o mesmo evento duas vezes.
+
+**Limitações conhecidas (Hobby):**
+
+- Se o envio imediato falhar, a nova tentativa ocorre só na próxima execução diária, ou seja, o aviso pode chegar com até ~1 dia de atraso.
+- Se a função for encerrada no meio do envio imediato, a linha fica em `processing` e só é retomada pelo cron do dia seguinte.
+- Existe uma janela rara: se a Meta aceitar a mensagem mas a função for encerrada antes de gravar `sent`, o cron pode reenviar. Nenhuma fila consegue eliminar esse caso sem confirmação da própria Meta.
+- No plano Pro é possível aumentar a frequência do cron sem alterar o código; os intervalos ficam em `lib/whatsapp/queue.ts` (`RETRY_DELAY_HOURS`, `DELIVERY_TTL_DAYS`).
 
 **Chave de idempotência** (`UNIQUE (business_id, dedupe_key)`):
 
@@ -113,5 +135,5 @@ Exemplo: `Barbearia do Centro`
    - `WHATSAPP_PHONE_NUMBER_ID`
    - `CRON_SECRET` (já usado pelo cron de cobrança)
    - Opcionais: `WHATSAPP_API_VERSION` (padrão `v23.0`), `WHATSAPP_TEMPLATE_LANGUAGE` (padrão `pt_BR`), `WHATSAPP_TEMPLATE_NEW_BOOKING`, `WHATSAPP_TEMPLATE_CANCELLATION`, `WHATSAPP_TEMPLATE_RESCHEDULE`, `WHATSAPP_TEMPLATE_TEST`.
-4. Fazer o deploy. O cron em `vercel.json` passa a processar a fila.
+4. Fazer o deploy. O cron diário em `vercel.json` passa a recuperar as pendências. O Hobby aceita esse agendamento diário; frequências maiores fazem o deploy falhar no Hobby.
 5. Em Configurações > Notificações, cadastrar o número, ativar e usar "Enviar teste".

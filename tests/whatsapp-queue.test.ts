@@ -170,10 +170,27 @@ test("falha temporária da Meta agenda nova tentativa com backoff e depois envia
   assert.equal(calls.length, 2)
 })
 
-test("backoff é progressivo e limitado", () => {
-  const delays = [1, 2, 3, 4, 9].map(retryDelayMs)
-  for (let i = 1; i < 4; i++) assert.ok(delays[i] > delays[i - 1])
-  assert.equal(delays[4], delays[3])
+test("intervalo de nova tentativa é compatível com cron diário", () => {
+  const day = 24 * 60 * 60_000
+  for (const attempts of [1, 2, 3, 4]) {
+    const delay = retryDelayMs(attempts)
+    assert.ok(delay < day, "fica elegível na próxima execução diária")
+    assert.ok(delay >= 12 * 60 * 60_000, "não promete tentativas em minutos")
+  }
+  assert.ok(DELIVERY_TTL_MS >= day * (MAX_ATTEMPTS - 1) + day, "a validade cobre todas as tentativas diárias")
+})
+
+test("envio imediato e cron não enviam a mesma entrega duas vezes", async () => {
+  const { store, rows } = memoryStore({ "biz-a": consented() })
+  const { sender, calls } = fakeSender([OK])
+  const deps: QueueDeps = { store, sender }
+  await enqueue(deps, "new_booking", snapshot())
+  const [immediate, cron] = await Promise.all([processQueue(deps, { id: rows[0].id, limit: 1 }), processQueue(deps)])
+  assert.equal(immediate.claimed + cron.claimed, 1)
+  assert.equal(calls.length, 1)
+  assert.equal(rows[0].status, "sent")
+  const later = await processQueue(deps)
+  assert.equal(later.claimed, 0)
 })
 
 test("respeita o limite de tentativas e marca como failed", async () => {
@@ -212,7 +229,7 @@ test("exceção de rede é tratada como falha temporária", async () => {
   assert.equal(rows[0].status, "pending")
 })
 
-test("aviso expirado em 24h é encerrado sem envio", async () => {
+test("aviso expirado em 7 dias é encerrado sem envio", async () => {
   const c = clock()
   const { store, rows } = memoryStore({ "biz-a": consented() })
   const { sender, calls } = fakeSender([OK])
