@@ -10,6 +10,15 @@ export function isValidPhone(value: string) {
   return digits.length === 10 || digits.length === 11
 }
 
+/**
+ * Forma única de armazenar o WhatsApp do proprietário: DDD + número, só dígitos, sem o 55.
+ * Usada no onboarding, nas configurações e no envio. Retorna null quando inválido ou vazio.
+ */
+export function normalizeWhatsappPhone(value: string | null | undefined) {
+  const digits = normalizePhone(value ?? "")
+  return digits.length === 10 || digits.length === 11 ? digits : null
+}
+
 export function formatPhone(value: string) {
   const digits = normalizePhone(value)
   if (digits.length === 11) return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`

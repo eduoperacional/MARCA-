@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, MessageCircle, Save } from "lucide-react"
+import { Loader2, Save } from "lucide-react"
 
 import { updateBusinessSettings } from "@/app/actions/operations"
 import { ScheduleEditor } from "@/components/shared/schedule-editor"
@@ -39,10 +39,10 @@ interface SettingsValues {
 
 export function SettingsForm({
   initial,
-  messaging,
+  notifications,
 }: {
   initial: SettingsValues
-  messaging: { connected: boolean; providerName: string | null }
+  notifications: React.ReactNode
 }) {
   const router = useRouter()
   const [values, setValues] = useState(initial)
@@ -180,28 +180,7 @@ export function SettingsForm({
         </TabsContent>
 
         <TabsContent value="notificacoes" keepMounted className="max-w-2xl data-[hidden]:hidden">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-wrap items-center gap-2">
-                <CardTitle>Mensagens automáticas</CardTitle>
-                {messaging.connected ? (
-                  <Badge className="bg-success/15 text-success">{messaging.providerName}</Badge>
-                ) : (
-                  <Badge variant="secondary">Não conectado</Badge>
-                )}
-              </div>
-              <CardDescription>
-                Confirmações e lembretes por WhatsApp ficam prontos para ativar assim que um provedor de mensagens for conectado.
-                Enquanto isso, a equipe recebe notificações internas no painel.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                <MessageCircle className="size-4" aria-hidden="true" />
-                Novo agendamento, cancelamento e reagendamento geram alertas no sino de notificações.
-              </p>
-            </CardContent>
-          </Card>
+          {notifications}
         </TabsContent>
       </Tabs>
     </form>
