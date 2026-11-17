@@ -15,8 +15,8 @@ import { recordSetupChange, type SetupMode } from "@/lib/setup-state"
 import { isValidSlug, slugify } from "@/lib/slug"
 import { isSlugAvailable, uniqueSlugFrom } from "@/lib/slug-server"
 import type { DaySchedule } from "@/lib/types"
-import { upsertWhatsappSettings } from "@/lib/whatsapp/service"
-import { toWhatsappNumber } from "@/lib/whatsapp/templates"
+import { normalizeWhatsappPhone } from "@/lib/phone"
+import { saveOwnerWhatsappPreferences } from "@/lib/whatsapp/service"
 
 type Result = { ok: true; ready?: boolean } | { ok: false; error: string }
 
@@ -76,6 +76,8 @@ export interface BusinessStepInput {
   logoUrl: string | null
   /** Opcional. Número do proprietário que recebe avisos de agendamento no WhatsApp. */
   notificationPhone?: string
+  /** Ativação voluntária do envio. Sem ela, o número fica salvo mas nada é enviado. */
+  notificationConsent?: boolean
   /** Cria um novo estabelecimento em vez de editar o ativo (fluxo "novo estabelecimento"). */
   createNew: boolean
   mode: SetupMode
@@ -103,12 +105,13 @@ export async function saveBusinessStep(input: BusinessStepInput): Promise<Result
   if (logo.error) return fail(logo.error)
   const mode: SetupMode = input.mode === "manual" ? "manual" : "guided"
   const rawNotificationPhone = String(input.notificationPhone ?? "").trim()
-  const notificationPhone = rawNotificationPhone ? toWhatsappNumber(rawNotificationPhone) : null
+  const notificationPhone = rawNotificationPhone ? normalizeWhatsappPhone(rawNotificationPhone) : null
   if (rawNotificationPhone && !notificationPhone) return fail("Informe um WhatsApp válido para notificações, com DDD.")
+  const notificationConsent = Boolean(input.notificationConsent && notificationPhone)
   const saveNotificationPhone = async (businessId: string) => {
     if (!notificationPhone) return
     try {
-      await upsertWhatsappSettings(businessId, { phone: notificationPhone, enabled: true })
+      await saveOwnerWhatsappPreferences(businessId, { phone: notificationPhone, enabled: notificationConsent })
     } catch (error) {
       console.error("[whatsapp] falha ao salvar número no onboarding", error)
     }

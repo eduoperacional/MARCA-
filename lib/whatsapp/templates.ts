@@ -1,40 +1,55 @@
-import { normalizePhone } from "@/lib/phone"
+import { normalizePhone, normalizeWhatsappPhone } from "@/lib/phone"
 
 export type WhatsappEvent = "new_booking" | "cancellation" | "reschedule" | "test"
 
 /**
- * Modelos de mensagem (templates) que precisam ser criados e aprovados na Meta, categoria "Utility",
- * idioma pt_BR. O nome pode ser sobrescrito por variável de ambiente sem alterar o código.
- * O texto em `body` é o conteúdo exato a cadastrar no WhatsApp Manager.
+ * Modelos de mensagem (templates) a criar e aprovar na Meta: categoria "Utility", idioma pt_BR.
+ * Regras seguidas para reduzir reprovação: no máximo 4 variáveis, texto fixo bem maior que as
+ * variáveis, nenhuma variável no início ou no fim do texto e nenhuma variável adjacente a outra.
+ * O nome pode ser sobrescrito por variável de ambiente sem alterar o código.
  */
-export const WHATSAPP_TEMPLATES: Record<WhatsappEvent, { envName: string; defaultName: string; body: string }> = {
+export const WHATSAPP_TEMPLATES: Record<
+  WhatsappEvent,
+  { envName: string; defaultName: string; body: string; example: string[] }
+> = {
   new_booking: {
     envName: "WHATSAPP_TEMPLATE_NEW_BOOKING",
     defaultName: "marcai_novo_agendamento",
-    body: "Novo agendamento em {{1}}: {{2}} marcou {{3}} com {{4}} para {{5}} às {{6}}.",
+    body:
+      "Você recebeu um novo agendamento em {{1}}.\n\nCliente: {{2}}\nServiço: {{3}}\nData e horário: {{4}}\n\n" +
+      "Os detalhes estão disponíveis no painel do MARCAÍ.",
+    example: ["Barbearia do Centro", "Maria Silva", "Corte feminino com João", "20/11/2026 às 14:30"],
   },
   cancellation: {
     envName: "WHATSAPP_TEMPLATE_CANCELLATION",
     defaultName: "marcai_cancelamento",
-    body: "Agendamento cancelado em {{1}}: {{2}} - {{3}} com {{4}}, que seria em {{5}} às {{6}}. O horário foi liberado.",
+    body:
+      "Um agendamento foi cancelado em {{1}}.\n\nCliente: {{2}}\nServiço: {{3}}\nHorário liberado: {{4}}\n\n" +
+      "O horário já está disponível para novos agendamentos no MARCAÍ.",
+    example: ["Barbearia do Centro", "Maria Silva", "Corte feminino com João", "20/11/2026 às 14:30"],
   },
   reschedule: {
     envName: "WHATSAPP_TEMPLATE_RESCHEDULE",
     defaultName: "marcai_reagendamento",
-    body: "Agendamento remarcado em {{1}}: {{2}} - {{3}} com {{4}} agora é em {{5}} às {{6}}.",
+    body:
+      "Um agendamento foi remarcado em {{1}}.\n\nCliente: {{2}}\nServiço: {{3}}\nNovo horário: {{4}}\n\n" +
+      "Confira a agenda atualizada no painel do MARCAÍ.",
+    example: ["Barbearia do Centro", "Maria Silva", "Corte feminino com João", "22/11/2026 às 10:00"],
   },
   test: {
     envName: "WHATSAPP_TEMPLATE_TEST",
     defaultName: "marcai_teste",
-    body: "Teste do MARCAÍ: as notificações de {{1}} chegarão neste WhatsApp.",
+    body:
+      "Este é um teste do MARCAÍ. Os avisos de agendamento de {{1}} serão enviados para este número.\n\n" +
+      "Se você não solicitou este teste, ignore esta mensagem.",
+    example: ["Barbearia do Centro"],
   },
 }
 
-/** Converte um telefone brasileiro (com DDD) para o formato aceito pela API: 55 + DDD + número. */
+/** Destino aceito pela API: 55 + DDD + número. Aceita qualquer formato de entrada. */
 export function toWhatsappNumber(value: string | null | undefined) {
-  const digits = normalizePhone(value ?? "")
-  if (digits.length !== 10 && digits.length !== 11) return null
-  return `55${digits}`
+  const national = normalizeWhatsappPhone(value)
+  return national ? `55${national}` : null
 }
 
 /** Parâmetros de template não podem ter quebras de linha, tabulações ou mais de 4 espaços seguidos. */

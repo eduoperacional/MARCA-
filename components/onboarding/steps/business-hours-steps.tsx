@@ -40,6 +40,7 @@ export function BusinessStep({ business, pending, onSubmit, createNew, mode }: S
             primaryColor: color,
             logoUrl: logo,
             notificationPhone: get("notificationPhone"),
+            notificationConsent: f.get("notificationConsent") === "on",
             createNew,
             mode,
           })
@@ -68,6 +69,15 @@ export function BusinessStep({ business, pending, onSubmit, createNew, mode }: S
       >
         <WhatsappPhoneInput id="notificationPhone" name="notificationPhone" />
       </Field>
+      <label htmlFor="notificationConsent" className="-mt-2 flex items-start gap-2 text-sm leading-relaxed text-muted-foreground">
+        <input
+          id="notificationConsent"
+          name="notificationConsent"
+          type="checkbox"
+          className="mt-1 size-4 shrink-0 accent-primary"
+        />
+        <span>Quero receber esses avisos no WhatsApp informado acima. Posso desativar a qualquer momento em Configurações.</span>
+      </label>
       <Field id="address" label="Endereço">
         <Input id="address" name="address" required maxLength={200} defaultValue={business?.address} placeholder="Rua, número, bairro" />
       </Field>

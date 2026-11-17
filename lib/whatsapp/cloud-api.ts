@@ -1,6 +1,9 @@
 import "server-only"
 
+import { isRetryableProviderError, type SendResult } from "@/lib/whatsapp/queue"
 import { buildTemplatePayload, WHATSAPP_TEMPLATES, type WhatsappEvent } from "@/lib/whatsapp/templates"
+
+export type { SendResult }
 
 /**
  * Cliente da WhatsApp Business Cloud API (oficial, Meta). O MARCAÍ é o remetente único;
@@ -22,13 +25,9 @@ export function isWhatsappConfigured() {
   return config() !== null
 }
 
-export type SendResult =
-  | { ok: true; messageId: string | null }
-  | { ok: false; reason: "not_configured" | "provider_error" | "network_error"; error: string }
-
 export async function sendWhatsappTemplate(input: { to: string; event: WhatsappEvent; params: string[] }): Promise<SendResult> {
   const cfg = config()
-  if (!cfg) return { ok: false, reason: "not_configured", error: "Provedor de WhatsApp não configurado." }
+  if (!cfg) return { ok: false, reason: "not_configured", error: "Provedor de WhatsApp não configurado.", retryable: false }
 
   const template = WHATSAPP_TEMPLATES[input.event]
   const templateName = process.env[template.envName] || template.defaultName
@@ -49,10 +48,15 @@ export async function sendWhatsappTemplate(input: { to: string; event: WhatsappE
     if (!response.ok) {
       const e = data?.error
       const detail = [e?.code, e?.message, e?.error_data?.details].filter(Boolean).join(" - ")
-      return { ok: false, reason: "provider_error", error: (detail || `HTTP ${response.status}`).slice(0, 500) }
+      return {
+        ok: false,
+        reason: "provider_error",
+        error: (detail || `HTTP ${response.status}`).slice(0, 500),
+        retryable: isRetryableProviderError(response.status, e?.code),
+      }
     }
     return { ok: true, messageId: data?.messages?.[0]?.id ?? null }
   } catch (error) {
-    return { ok: false, reason: "network_error", error: String((error as Error)?.message ?? error).slice(0, 500) }
+    return { ok: false, reason: "network_error", error: String((error as Error)?.message ?? error).slice(0, 500), retryable: true }
   }
 }

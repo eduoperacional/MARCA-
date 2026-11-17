@@ -1,10 +1,8 @@
 import "server-only"
 
-import { after } from "next/server"
-
 import { db } from "@/lib/db"
 import { notifications } from "@/lib/db/schema"
-import { notifyOwnerWhatsapp } from "@/lib/whatsapp/service"
+import { enqueueAppointmentNotification } from "@/lib/whatsapp/service"
 
 export type NotificationType =
   | "appointment_created"
@@ -47,7 +45,8 @@ const WHATSAPP_EVENT: Partial<Record<NotificationType, "new_booking" | "cancella
 
 /**
  * Registra uma notificação interna para a equipe e, quando aplicável, agenda o envio por
- * WhatsApp ao proprietário. O envio roda depois da resposta e nunca interrompe o fluxo.
+ * WhatsApp ao proprietário (fila persistente). O enfileiramento nunca lança erro e o envio
+ * acontece depois da resposta ou pelo cron, sem interromper o fluxo do agendamento.
  */
 export async function notify(input: {
   businessId: string
@@ -66,11 +65,5 @@ export async function notify(input: {
 
   const event = WHATSAPP_EVENT[input.type]
   if (!event || !input.appointmentId) return
-  const job = () =>
-    notifyOwnerWhatsapp({ businessId: input.businessId, appointmentId: input.appointmentId!, event })
-  try {
-    after(job)
-  } catch {
-    void job()
-  }
+  await enqueueAppointmentNotification({ businessId: input.businessId, appointmentId: input.appointmentId, event })
 }
