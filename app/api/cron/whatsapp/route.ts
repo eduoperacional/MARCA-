@@ -1,7 +1,6 @@
 import { isMissingTable, processWhatsappQueue } from "@/lib/whatsapp/service"
 import type { QueueRunSummary } from "@/lib/whatsapp/queue"
 
-export const dynamic = "force-dynamic"
 export const maxDuration = 60
 
 const BATCH_SIZE = 50
