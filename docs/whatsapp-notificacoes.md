@@ -30,11 +30,21 @@ Uma única função, `normalizeWhatsappPhone` (`lib/phone.ts`), é usada no onbo
 
 ## Fila, tentativas e idempotência
 
-O projeto está no **Vercel Hobby**, que só permite cron **uma vez por dia** e pode executá-lo em qualquer momento dentro da hora agendada. Por isso o envio normal é imediato, e o cron serve apenas para recuperação.
+O projeto está no **Vercel Hobby**, que só permite cron **uma vez por dia**. Por isso o envio normal é imediato, e a recuperação da fila é disparada por um **agendador externo gratuito** (por exemplo, cron-job.org) a cada 5 minutos. O `vercel.json` mantém apenas o cron de cobrança Asaas.
+
+**Configuração do agendador externo:**
+
+- URL: `https://<domínio-de-produção>/api/cron/whatsapp`
+- Método: `GET`
+- Cabeçalho: `Authorization: Bearer <CRON_SECRET>` (mesmo valor da variável `CRON_SECRET` do projeto)
+- Intervalo: a cada 5 minutos (`*/5 * * * *`)
+- Timeout: pelo menos 60 segundos (a rota processa por até 45 s)
+
+Sem o cabeçalho correto, ou sem `CRON_SECRET` configurado, a rota responde `401`. Chamadas sobrepostas são seguras: a reserva com `FOR UPDATE SKIP LOCKED` e o bloqueio de 2 minutos impedem que a mesma linha seja enviada duas vezes.
 
 1. Quando ocorre o evento (criar, cancelar ou reagendar), o aviso é gravado em `whatsapp_deliveries` com status `pending`, **antes** de qualquer chamada à Meta.
 2. **Envio imediato:** logo após a resposta da requisição (`after()`), o sistema reserva essa linha pelo id e chama a Meta Cloud API. No caso comum, o proprietário recebe o aviso em segundos, sem depender do cron.
-3. **Recuperação diária:** o cron `/api/cron/whatsapp` roda uma vez por dia (`0 12 * * *`, 12:00 UTC = 09:00 em Brasília, com variação de até 1 hora no Hobby), protegido por `CRON_SECRET`. Ele processa, em lotes de 50 por até 45 segundos, as pendências de falhas temporárias e as entregas interrompidas.
+3. **Recuperação:** a rota `/api/cron/whatsapp` é chamada pelo agendador externo a cada 5 minutos, protegida por `CRON_SECRET`. Ele processa, em lotes de 50 por até 45 segundos, as pendências de falhas temporárias e as entregas interrompidas.
 4. **Tentativas:** 1 imediata + até 4 nas execuções diárias do cron (5 no total). Após uma falha temporária (HTTP 408/429/5xx, limites da Meta, erros de rede), a próxima tentativa fica elegível depois de 20 horas, valor abaixo de 24 h para que a pendência já esteja pronta na execução seguinte do cron. Não há novas tentativas em minutos.
 5. Falhas permanentes (template não aprovado, número inválido, credencial inválida) vão direto para `failed`.
 6. **Validade:** um aviso pendente expira em **7 dias**, prazo que cobre todas as tentativas diárias. Ao expirar, é encerrado como `failed`.
@@ -49,10 +59,11 @@ O projeto está no **Vercel Hobby**, que só permite cron **uma vez por dia** e 
 
 **Limitações conhecidas (Hobby):**
 
-- Se o envio imediato falhar, a nova tentativa ocorre só na próxima execução diária, ou seja, o aviso pode chegar com até ~1 dia de atraso.
-- Se a função for encerrada no meio do envio imediato, a linha fica em `processing` e só é retomada pelo cron do dia seguinte.
+- Se o envio imediato falhar temporariamente, a nova tentativa só fica elegível após o intervalo de 20 horas (`RETRY_DELAY_HOURS`); a frequência de 5 minutos não antecipa esse intervalo.
+- Se a função for encerrada no meio do envio imediato, a linha fica em `processing` e é retomada pela primeira chamada do agendador após o bloqueio de 2 minutos expirar.
+- Se o agendador externo ficar fora do ar, a recuperação para até ele voltar; o envio imediato continua funcionando.
 - Existe uma janela rara: se a Meta aceitar a mensagem mas a função for encerrada antes de gravar `sent`, o cron pode reenviar. Nenhuma fila consegue eliminar esse caso sem confirmação da própria Meta.
-- No plano Pro é possível aumentar a frequência do cron sem alterar o código; os intervalos ficam em `lib/whatsapp/queue.ts` (`RETRY_DELAY_HOURS`, `DELIVERY_TTL_DAYS`).
+- Os intervalos de tentativa e validade ficam em `lib/whatsapp/queue.ts` (`RETRY_DELAY_HOURS`, `DELIVERY_TTL_DAYS`).
 
 **Chave de idempotência** (`UNIQUE (business_id, dedupe_key)`):
 

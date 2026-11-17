@@ -1,3 +1,4 @@
+import { isAuthorizedCronRequest } from "@/lib/cron-auth"
 import { isMissingTable, processWhatsappQueue } from "@/lib/whatsapp/service"
 import type { QueueRunSummary } from "@/lib/whatsapp/queue"
 
@@ -8,13 +9,13 @@ const BATCH_SIZE = 50
 const TIME_BUDGET_MS = 45_000
 
 /**
- * Recuperação diária da fila de WhatsApp (Vercel Hobby: 1 execução por dia).
+ * Recuperação da fila de WhatsApp, chamada a cada 5 minutos por um agendador externo
+ * (GET com `Authorization: Bearer CRON_SECRET`), já que o Vercel Hobby só permite cron diário.
  * O envio normal é imediato; aqui só ficam pendências temporárias e entregas interrompidas.
  * Processa em lotes até esvaziar as pendências elegíveis ou atingir o limite de tempo.
  */
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET
-  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
+  if (!isAuthorizedCronRequest(request, process.env.CRON_SECRET)) {
     return Response.json({ error: "unauthorized" }, { status: 401 })
   }
   try {
