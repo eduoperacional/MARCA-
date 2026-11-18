@@ -36,6 +36,31 @@ export const PLAN_FEATURES: Record<string, string> = {
   custom_branding: "Marca personalizada",
 }
 
+/** Família do plano de entrada; os demais planos incluem tudo o que ele oferece. */
+export const BASE_PLAN_FAMILY = "start"
+
+/**
+ * Recursos do núcleo do sistema, já disponíveis em todos os planos. Uso apenas comercial:
+ * não altera `plans.features` nem as permissões; os diferenciais de Pro e Elite seguem
+ * sendo relatórios, financeiro, equipe, automações e marca personalizada.
+ */
+export const PLAN_CORE_BENEFITS = [
+  "Agendamento online com link personalizado",
+  "Agenda diária, semanal e mensal",
+  "Bloqueio de horários e intervalos",
+  "Cadastro e histórico de clientes",
+  "Catálogo de serviços com preço e duração",
+  "Painel com a visão geral do dia",
+]
+
+/** Lista de benefícios exibida na vitrine de planos a partir das features cadastradas. */
+export function describePlanFeatures(family: string, features: string[], hasBasePlan: boolean): string[] {
+  const labels = features.filter((f) => f !== "online_booking").map((f) => PLAN_FEATURES[f] ?? f)
+  if (family === BASE_PLAN_FAMILY) return [...PLAN_CORE_BENEFITS, ...labels]
+  if (hasBasePlan) return ["Tudo do plano Start", ...labels]
+  return features.map((f) => PLAN_FEATURES[f] ?? f)
+}
+
 export const PLAN_LIMITS: Record<"professionals" | "services" | "members", string> = {
   professionals: "Profissionais ativos",
   services: "Serviços ativos",

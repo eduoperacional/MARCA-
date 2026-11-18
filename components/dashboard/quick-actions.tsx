@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { ChevronRight } from "lucide-react"
 
+import { SectionHeading } from "@/components/dashboard/section-heading"
 import { QUICK_ACTIONS, type QuickAction } from "@/config/quick-actions"
 import { useShareBookingLink } from "@/hooks/use-share-booking-link"
 
@@ -34,9 +35,7 @@ export function QuickActions({ bookingSlug }: { bookingSlug?: string }) {
 
   return (
     <section aria-labelledby="quick-actions-title" className="flex flex-col gap-3">
-      <h2 id="quick-actions-title" className="font-heading text-sm font-medium text-muted-foreground">
-        Ações rápidas
-      </h2>
+      <SectionHeading id="quick-actions-title" title="Ações rápidas" />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
         {QUICK_ACTIONS.map((action) =>
           action.href ? (

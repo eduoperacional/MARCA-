@@ -7,6 +7,7 @@ import { PerformanceSummary } from "@/components/dashboard/performance-summary"
 import { PeriodFilter } from "@/components/dashboard/period-filter"
 import { QuickActions } from "@/components/dashboard/quick-actions"
 import { RevenueChart } from "@/components/dashboard/revenue-chart"
+import { SectionHeading } from "@/components/dashboard/section-heading"
 import { TodayPanel } from "@/components/dashboard/today-panel"
 import { TodaySchedule } from "@/components/dashboard/today-schedule"
 import { PageHeader } from "@/components/layout/page-header"
@@ -57,22 +58,27 @@ export function DashboardOverview({
 
       <TodayPanel today={today} appointments={todayAppointments} operations={todayOperations} />
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <TodaySchedule className="lg:col-span-2" appointments={todayAppointments} options={options} />
-        <PerformanceSummary summary={data.summary} />
-      </div>
+      <section aria-labelledby="schedule-title" className="flex flex-col gap-3">
+        <SectionHeading id="schedule-title" title="Agenda e destaques" />
+        <div className="grid gap-4 lg:grid-cols-3">
+          <TodaySchedule className="lg:col-span-2" appointments={todayAppointments} options={options} />
+          <PerformanceSummary summary={data.summary} />
+        </div>
+      </section>
 
       <QuickActions bookingSlug={bookingSlug} />
 
       <section aria-labelledby="period-title" className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 id="period-title" className="font-heading text-sm font-medium text-muted-foreground">
-            Desempenho no período · {describeRange(data.range)}
-          </h2>
-          <Link href="/painel/relatorios" className="text-xs font-medium text-brand-light hover:underline">
-            Ver relatórios completos
-          </Link>
-        </div>
+        <SectionHeading
+          id="period-title"
+          title="Desempenho no período"
+          description={describeRange(data.range)}
+          action={
+            <Link href="/painel/relatorios" className="text-xs font-medium text-brand-light hover:underline">
+              Ver relatórios completos
+            </Link>
+          }
+        />
         <KpiGrid kpis={data.kpis} />
         <RevenueChart
           data={data.revenueSeries}

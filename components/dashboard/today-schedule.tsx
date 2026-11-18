@@ -52,7 +52,7 @@ export function TodaySchedule({
         </CardDescription>
         <CardAction>
           <Select items={professionalItems} value={professionalId} onValueChange={(value) => setProfessionalId(value ?? ALL)}>
-            <SelectTrigger size="sm" className="w-44" aria-label="Filtrar por profissional">
+            <SelectTrigger size="sm" className="w-36 sm:w-44" aria-label="Filtrar por profissional">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -105,6 +105,9 @@ export function TodaySchedule({
                     <span className="truncate text-sm font-medium">{appointment.clientName}</span>
                     <span className="truncate text-xs text-muted-foreground">
                       {appointment.service.name} · {appointment.professional.name}
+                    </span>
+                    <span className="text-xs tabular-nums text-muted-foreground md:hidden">
+                      {formatCurrency(appointment.price)}
                     </span>
                   </div>
                   <span className="hidden text-sm tabular-nums text-muted-foreground md:block">

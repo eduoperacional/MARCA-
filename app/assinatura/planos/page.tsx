@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import { redirect } from "next/navigation"
 
 import { CheckoutForm, type PlanOption } from "@/components/billing/checkout-form"
-import { PLAN_FEATURES, PLAN_LIMITS } from "@/lib/admin/labels"
+import { BASE_PLAN_FAMILY, PLAN_LIMITS, describePlanFeatures } from "@/lib/admin/labels"
 import { TRIAL_DAYS, businessTrialEnd } from "@/lib/billing/access"
 import { enabledBillingTypes, isAsaasConfigured } from "@/lib/billing/asaas"
 import { listPublicPlans } from "@/lib/billing/self-service"
@@ -23,6 +23,7 @@ export default async function PlansPage() {
     hasHadSubscription(db, access.business.id),
   ])
 
+  const hasBasePlan = rows.some((p) => (p.family ?? p.code) === BASE_PLAN_FAMILY)
   const plans: PlanOption[] = rows.map((p) => ({
     id: p.id,
     name: p.name,
@@ -31,7 +32,7 @@ export default async function PlansPage() {
     interval: p.billingInterval,
     family: p.family ?? p.code,
     recommended: p.isRecommended,
-    features: p.features.map((f) => PLAN_FEATURES[f] ?? f),
+    features: describePlanFeatures(p.family ?? p.code, p.features, hasBasePlan),
     limits: Object.entries(p.limits).map(([key, value]) => {
       const label = PLAN_LIMITS[key as keyof typeof PLAN_LIMITS] ?? key
       return value && value > 0 ? `${label}: até ${value}` : `${label}: ilimitado`
