@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { connection } from "next/server"
 import { Check } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -45,6 +46,8 @@ export function PricingSkeleton() {
 }
 
 export async function PricingPlans() {
+  // Vagas e datas da promoção precisam refletir o momento da requisição, nunca um snapshot do build.
+  await connection()
   const [plans, promo] = await Promise.all([loadMonthlyPlans(), loadLaunchPromoSafe(db)])
 
   if (plans.length === 0) {
