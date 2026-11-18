@@ -10,7 +10,8 @@ export function validateWeekSchedule(schedule: unknown): string | null {
   if (!Array.isArray(schedule) || schedule.length !== 7) return "Horários inválidos."
   const weekdays = new Set<number>()
   for (const day of schedule as DaySchedule[]) {
-    if (!Number.isInteger(day?.weekday) || day.weekday < 0 || day.weekday > 6) return "Horários inválidos."
+    if (!day || typeof day !== "object" || typeof day.active !== "boolean") return "Horários inválidos."
+    if (!Number.isInteger(day.weekday) || day.weekday < 0 || day.weekday > 6 || weekdays.has(day.weekday)) return "Horários inválidos."
     weekdays.add(day.weekday)
     if (!day.active) continue
     if (!isTime(day.start) || !isTime(day.end) || toMinutes(day.end) <= toMinutes(day.start)) {

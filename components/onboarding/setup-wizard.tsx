@@ -44,15 +44,19 @@ export function SetupWizard({ step, steps, percent, business, services, professi
   const submit = (save: Saver) => {
     setError(null)
     startTransition(async () => {
-      const result = await save()
-      if (!result.ok) {
-        setError(result.error)
-        return
+      try {
+        const result = await save()
+        if (!result.ok) {
+          setError(result.error)
+          return
+        }
+        if (isNew && mode === "manual") router.push("/painel")
+        else if (result.ready && step === SETUP_STEPS.length) go("concluido")
+        else advance()
+        router.refresh()
+      } catch {
+        setError("Não foi possível salvar. Verifique sua conexão e tente novamente.")
       }
-      if (isNew && mode === "manual") router.push("/painel")
-      else if (result.ready && step === SETUP_STEPS.length) go("concluido")
-      else advance()
-      router.refresh()
     })
   }
 
