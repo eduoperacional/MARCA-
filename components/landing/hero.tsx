@@ -1,7 +1,7 @@
-import Image from "next/image"
 import Link from "next/link"
-import { ArrowRight, BellRing, CalendarCheck, Clock3 } from "lucide-react"
+import { ArrowRight } from "lucide-react"
 
+import { HeroVisual } from "@/components/landing/hero-visual"
 import { Button } from "@/components/ui/button"
 
 export function Hero() {
@@ -12,8 +12,12 @@ export function Hero() {
         className="animate-glow absolute left-1/2 top-[-12rem] -z-10 size-[48rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgb(123_63_242/0.35),transparent_65%)] blur-3xl"
         aria-hidden
       />
+      <div
+        className="absolute right-[-10rem] top-1/3 -z-10 size-[36rem] rounded-full bg-[radial-gradient(circle,rgb(184_139_255/0.18),transparent_65%)] blur-3xl"
+        aria-hidden
+      />
 
-      <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 pb-20 pt-16 md:pb-28 md:pt-24 lg:grid-cols-[1.05fr_1fr]">
+      <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-20 pt-14 md:pb-28 md:pt-20 lg:grid-cols-[1fr_1.05fr] lg:gap-6">
         <div className="flex flex-col items-start gap-7">
           <span className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium tracking-wide text-brand-light">
             <span className="size-1.5 rounded-full bg-brand-light" aria-hidden />
@@ -55,54 +59,7 @@ export function Hero() {
           <p className="text-sm text-muted-foreground">7 dias grátis. Sem cartão de crédito.</p>
         </div>
 
-        <div className="relative mx-auto w-full max-w-xl">
-          <div className="relative aspect-[4/3] w-full">
-            <Image
-              src="/images/landing-hero-3d.png"
-              alt="Calendário 3D em vidro roxo com horários iluminados, envolto por um anel de relógio"
-              fill
-              priority
-              sizes="(min-width: 1024px) 560px, 100vw"
-              className="animate-float object-contain [mask-image:radial-gradient(ellipse_at_center,#000_55%,transparent_78%)]"
-            />
-          </div>
-
-          <div className="animate-float-slow absolute left-0 top-6 flex items-center gap-3 rounded-2xl border border-white/10 bg-[#14141f]/80 p-3 pr-4 shadow-2xl backdrop-blur-xl sm:-left-6">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-primary/20 text-brand-light">
-              <CalendarCheck className="size-4" aria-hidden />
-            </span>
-            <div className="flex flex-col">
-              <span className="text-sm font-medium">Agendamento confirmado</span>
-              <span className="text-xs text-muted-foreground">Hoje · 15:30</span>
-            </div>
-          </div>
-
-          <div className="animate-float absolute bottom-10 right-0 flex flex-col gap-2 rounded-2xl border border-white/10 bg-[#14141f]/80 p-4 shadow-2xl backdrop-blur-xl sm:-right-4">
-            <span className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Clock3 className="size-3.5" aria-hidden />
-              Horários de hoje
-            </span>
-            <div className="flex gap-1.5" aria-hidden>
-              {["09:00", "10:30", "14:00"].map((slot, i) => (
-                <span
-                  key={slot}
-                  className={
-                    i === 1
-                      ? "rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground"
-                      : "rounded-lg border border-white/10 px-2.5 py-1 text-xs text-foreground/80"
-                  }
-                >
-                  {slot}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="animate-float-slow absolute -bottom-2 left-6 hidden items-center gap-2 rounded-full border border-white/10 bg-[#14141f]/80 px-3 py-2 text-xs shadow-xl backdrop-blur-xl sm:flex">
-            <BellRing className="size-3.5 text-brand-light" aria-hidden />
-            Lembrete enviado ao cliente
-          </div>
-        </div>
+        <HeroVisual />
       </div>
     </section>
   )
