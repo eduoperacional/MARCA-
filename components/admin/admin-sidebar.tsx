@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { useState } from "react"
 import {
   Activity,
+  BadgePercent,
   BarChart3,
   Building2,
   CreditCard,
@@ -43,6 +44,7 @@ const NAV: { title: string; items: NavItem[] }[] = [
     title: "Comercial",
     items: [
       { href: "/admin/assinaturas", label: "Assinaturas", icon: CreditCard, permission: "subscriptions.view" },
+      { href: "/admin/promocao", label: "Promoção", icon: BadgePercent, permission: "subscriptions.view" },
       { href: "/admin/planos", label: "Planos", icon: Package, permission: "plans.manage" },
       { href: "/admin/financeiro", label: "Financeiro", icon: Wallet, permission: "finance.view" },
       { href: "/admin/metricas", label: "Métricas", icon: BarChart3, permission: "finance.view" },
