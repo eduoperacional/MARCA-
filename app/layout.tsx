@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     template: "%s · MARCAÍ",
   },
   description:
-    "Plataforma de agendamento online e gestão de atendimentos para barbearias, salões, clínicas, estúdios e profissionais autônomos.",
+    "Plataforma de agendamento online e gestão de atendimentos para beleza, saúde, estética, consultórios, profissionais autônomos e serviços.",
   applicationName: "MARCAÍ",
 }
 
