@@ -4,6 +4,7 @@
   "buildCommand": "next build",
   "installCommand": "pnpm install",
   "crons": [
-    { "path": "/api/cron/billing", "schedule": "0 9 * * *" }
+    { "path": "/api/cron/billing", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/retention", "schedule": "30 6 * * *" }
   ]
 }

@@ -1,6 +1,7 @@
 import { computeBillingAccess, isBillingEnforced } from "@/lib/billing/access"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
 import { getCurrentSubscription, getSuspension } from "@/lib/billing/subscriptions"
+import { legacyPhoneRateLimitKeys, phoneRateLimitKeys, rateLimitSecret } from "@/lib/rate-limit-keys"
 
 export type QueryExec = { query(sql: string, params: unknown[]): Promise<{ rows: unknown[] }> }
 
@@ -37,11 +38,33 @@ export async function allowBookingFromIp(exec: QueryExec, ip: string) {
   return short && daily
 }
 
-/** Limite por telefone normalizado no estabelecimento. */
-export async function allowBookingForPhone(exec: QueryExec, businessId: string, phoneNormalized: string) {
+/** Tentativas ainda vigentes registradas no formato antigo, com o telefone em texto puro. */
+async function legacyPhoneCounts(exec: QueryExec, businessId: string, phoneNormalized: string) {
+  const legacy = legacyPhoneRateLimitKeys(businessId, phoneNormalized)
+  const { rows } = await exec.query(
+    `select key, count from app_rate_limits where key = any($1::text[]) and reset_at > now()`,
+    [[legacy.short, legacy.daily]]
+  )
+  const countFor = (key: string) =>
+    Number((rows as { key: string; count: number | string }[]).find((r) => r.key === key)?.count ?? 0)
+  return { short: countFor(legacy.short), daily: countFor(legacy.daily) }
+}
+
+/**
+ * Limite por telefone normalizado no estabelecimento. A chave guarda só um HMAC do telefone.
+ * As tentativas vigentes no formato antigo entram na conta, para a troca não liberar novas reservas.
+ */
+export async function allowBookingForPhone(
+  exec: QueryExec,
+  businessId: string,
+  phoneNormalized: string,
+  secret: string = rateLimitSecret()
+) {
   const { phoneShort, phoneDaily } = PUBLIC_BOOKING_LIMITS
-  const short = await consumeRateLimit(exec, `booking-phone:${businessId}:${phoneNormalized}`, phoneShort.max, phoneShort.windowSeconds)
-  const daily = await consumeRateLimit(exec, `booking-phone-day:${businessId}:${phoneNormalized}`, phoneDaily.max, phoneDaily.windowSeconds)
+  const keys = phoneRateLimitKeys(businessId, phoneNormalized, secret)
+  const legacy = await legacyPhoneCounts(exec, businessId, phoneNormalized)
+  const short = await consumeRateLimit(exec, keys.short, phoneShort.max - legacy.short, phoneShort.windowSeconds)
+  const daily = await consumeRateLimit(exec, keys.daily, phoneDaily.max - legacy.daily, phoneDaily.windowSeconds)
   return short && daily
 }
 
