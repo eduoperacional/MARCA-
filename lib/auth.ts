@@ -8,18 +8,13 @@ import { pool } from "@/lib/db"
 import { isEmailConfigured, sendEmail } from "@/lib/email"
 import { isCurrentLegalAcceptance, LEGAL_ACCEPTANCE_ERROR } from "@/lib/legal"
 import { recordLegalAcceptance } from "@/lib/legal-acceptance"
+import { getAuthBaseURL, getTrustedAuthOrigins } from "@/lib/auth-origin-policy"
 
 const SIGN_UP_PATH = "/sign-up/email"
 
 export const auth = betterAuth({
   database: pool,
-  baseURL:
-    process.env.BETTER_AUTH_URL ??
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : process.env.V0_RUNTIME_URL),
+  baseURL: getAuthBaseURL(process.env),
   emailAndPassword: {
     enabled: true,
     autoSignIn: true,
@@ -73,25 +68,7 @@ export const auth = betterAuth({
       },
     },
   },
-  trustedOrigins: [
-    ...(process.env.NODE_ENV === "development"
-      ? [
-          "http://localhost:3000",
-          ...(process.env.V0_RUNTIME_URL ? [process.env.V0_RUNTIME_URL] : []),
-          ...(process.env.V0_DEV_APP_URL ? [process.env.V0_DEV_APP_URL] : []),
-          ...(process.env.V0_BUILD_URL ? [process.env.V0_BUILD_URL] : []),
-          ...(process.env.V0_SANDBOX_URL ? [process.env.V0_SANDBOX_URL] : []),
-        ]
-      : []),
-    ...(process.env.NODE_ENV === "production"
-      ? [
-          ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : []),
-          ...(process.env.VERCEL_PROJECT_PRODUCTION_URL
-            ? [`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`]
-            : []),
-        ]
-      : []),
-  ],
+  trustedOrigins: getTrustedAuthOrigins(process.env),
   session: {
     expiresIn: 60 * 60 * 24 * 30,
     updateAge: 60 * 60 * 24,
