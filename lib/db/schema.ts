@@ -40,6 +40,13 @@ export const businesses = pgTable("businesses", {
   createdAt: createdAt(),
 })
 
+/** Endereços públicos usados anteriormente, mantidos para não quebrar links antigos (script 018). */
+export const businessSlugHistory = pgTable("business_slug_history", {
+  slug: text("slug").primaryKey(),
+  businessId: uuid("business_id").notNull(),
+  createdAt: createdAt(),
+})
+
 /** Progresso da configuração inicial (script 014). */
 export const businessOnboarding = pgTable("business_onboarding", {
   businessId: uuid("business_id").primaryKey(),

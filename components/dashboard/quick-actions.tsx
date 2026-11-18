@@ -7,7 +7,7 @@ import { QUICK_ACTIONS, type QuickAction } from "@/config/quick-actions"
 import { useShareBookingLink } from "@/hooks/use-share-booking-link"
 
 const tileClass =
-  "group flex items-center gap-3 rounded-xl border bg-card p-3 text-left outline-none transition-colors hover:border-primary/40 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+  "group flex items-center gap-3 rounded-xl border bg-card p-3 text-left outline-none min-h-14 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-accent hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring active:translate-y-0 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
 
 function TileContent({ action }: { action: QuickAction }) {
   return (

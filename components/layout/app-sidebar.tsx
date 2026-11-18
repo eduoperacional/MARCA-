@@ -95,7 +95,7 @@ export function AppSidebar() {
       <SidebarFooter className="p-3 group-data-[collapsible=icon]:hidden">
         <div className="flex flex-col gap-0.5 rounded-xl border border-primary/25 bg-primary/10 p-3">
           <p className="text-xs font-medium text-sidebar-accent-foreground">{ROLE_LABELS[role]}</p>
-          <p className="truncate text-[11px] text-muted-foreground">marcai.app/agendar/{business.slug}</p>
+          <p className="truncate text-[11px] text-muted-foreground">/agendar/{business.slug}</p>
         </div>
       </SidebarFooter>
       <SidebarRail />

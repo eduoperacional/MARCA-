@@ -13,7 +13,7 @@ import { clientIp, rateLimit, RATE_LIMITED } from "@/lib/rate-limit"
 import { normalizeWeekSchedule, validateWeekSchedule } from "@/lib/schedule"
 import { recordSetupChange, type SetupMode } from "@/lib/setup-state"
 import { isValidSlug, slugify } from "@/lib/slug"
-import { isSlugAvailable, uniqueSlugFrom } from "@/lib/slug-server"
+import { changeSlug, checkSlugFor, uniqueSlugFrom } from "@/lib/slug-server"
 import type { DaySchedule } from "@/lib/types"
 import { normalizeWhatsappPhone } from "@/lib/phone"
 import { saveOwnerWhatsappPreferences } from "@/lib/whatsapp/service"
@@ -224,24 +224,19 @@ export async function savePageStep(input: PageStepInput): Promise<Result> {
   const business = ctx.access.business
   const slug = slugify(input.slug ?? "")
   if (!isValidSlug(slug)) return fail("Endereço inválido. Use letras, números e hífens (3 a 48 caracteres).")
-  if (!(await isSlugAvailable(slug, business.id))) return fail("Este endereço já está em uso. Escolha outro.")
   const cover = cleanImage(input.coverUrl)
   if (cover.error) return fail(cover.error)
 
-  try {
-    await db
-      .update(businesses)
-      .set({
-        slug,
-        description: cleanText(input.description, 500),
-        coverUrl: cover.value,
-        onlineBookingEnabled: Boolean(input.onlineBookingEnabled),
-      })
-      .where(eq(businesses.id, business.id))
-  } catch (error) {
-    if ((error as { cause?: { code?: string } })?.cause?.code === "23505") return fail("Este endereço já está em uso. Escolha outro.")
-    throw error
-  }
+  const changed = await changeSlug(business.id, slug)
+  if (!changed.ok) return fail(changed.error)
+  await db
+    .update(businesses)
+    .set({
+      description: cleanText(input.description, 500),
+      coverUrl: cover.value,
+      onlineBookingEnabled: Boolean(input.onlineBookingEnabled),
+    })
+    .where(eq(businesses.id, business.id))
   return finish(business.id, ["page"])
 }
 
@@ -249,11 +244,22 @@ export async function checkSlugAvailability(slug: string) {
   const session = await getSession()
   if (!session?.user) return { available: false, reason: "Sessão expirada." }
   if (!(await rateLimit(`slug-check:${await clientIp()}`, 60, 60))) return { available: false, reason: RATE_LIMITED }
-  const normalized = slugify(slug ?? "")
-  if (!isValidSlug(normalized)) return { available: false, reason: "Use letras, números e hífens (3 a 48 caracteres)." }
   const access = await getAccess()
-  const available = await isSlugAvailable(normalized, access?.role === "owner" ? access.business.id : undefined)
-  return { available, reason: available ? null : "Endereço indisponível." }
+  const result = await checkSlugFor(slug ?? "", access?.role === "owner" ? access.business.id : undefined)
+  return result.available
+    ? { available: true, slug: result.slug, reason: null, suggestions: [] as string[] }
+    : { available: false, slug: result.slug, reason: result.reason, suggestions: result.suggestions }
+}
+
+/** Troca o endereço público do estabelecimento (somente proprietário). O anterior continua redirecionando. */
+export async function updateBookingSlug(slug: string): Promise<{ ok: true; slug: string } | { ok: false; error: string; suggestions?: string[] }> {
+  const ctx = await requireOwner()
+  if (!ctx.access) return fail(ctx.error!)
+  if (!(await rateLimit(`slug-update:${ctx.access.business.id}`, 10, 60 * 60))) return fail(RATE_LIMITED)
+  const result = await changeSlug(ctx.access.business.id, slug)
+  if (!result.ok) return result
+  revalidatePath("/", "layout")
+  return { ok: true, slug: result.slug }
 }
 
 /* ------------------------------ Preferências ------------------------------ */

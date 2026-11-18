@@ -1,55 +1,35 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import Link from "next/link"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
-import { Check, Copy, ExternalLink, Globe, MessageCircle, Settings } from "lucide-react"
-import { toast } from "sonner"
+import { Globe, Settings } from "lucide-react"
 
+import { BookingLinkCard } from "@/components/booking/booking-link-card"
 import { StatusBadge } from "@/components/shared/status-badge"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { formatCurrency } from "@/lib/format"
 import { dateFromLocal } from "@/lib/time"
 import type { Appointment } from "@/lib/types"
 
 export function BookingPageAdmin({
   slug,
+  siteUrl,
+  canEdit,
   businessName,
   settings,
   onlineLast30,
   recent,
 }: {
   slug: string
+  siteUrl: string
+  canEdit: boolean
   businessName: string
   settings: { onlineBookingEnabled: boolean; minAdvanceMin: number; slotIntervalMin: number }
   onlineLast30: number
   recent: Appointment[]
 }) {
-  const path = `/agendar/${slug}`
-  const [url, setUrl] = useState(path)
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    setUrl(`${window.location.origin}${path}`)
-  }, [path])
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(true)
-      toast.success("Link copiado")
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      toast.error("Não foi possível copiar o link.")
-    }
-  }
-
-  const whatsappHref = `https://wa.me/?text=${encodeURIComponent(`Agende seu horário em ${businessName}: ${url}`)}`
-
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
@@ -57,36 +37,20 @@ export function BookingPageAdmin({
         <p className="text-sm text-muted-foreground">Compartilhe o link para seus clientes marcarem horário sozinhos, 24h por dia.</p>
       </div>
 
+      <BookingLinkCard
+        slug={slug}
+        siteUrl={siteUrl}
+        businessName={businessName}
+        onlineBookingEnabled={settings.onlineBookingEnabled}
+        canEdit={canEdit}
+      />
+
       <Card>
         <CardHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle>Seu link público</CardTitle>
-            {settings.onlineBookingEnabled ? (
-              <Badge className="bg-success/15 text-success">Ativa</Badge>
-            ) : (
-              <Badge variant="secondary">Desativada</Badge>
-            )}
-          </div>
+          <CardTitle>Desempenho e regras</CardTitle>
           <CardDescription>Os horários exibidos respeitam a jornada dos profissionais, bloqueios e agendamentos existentes.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Input readOnly value={url} aria-label="Link da página de agendamento" className="font-mono text-sm" onFocus={(e) => e.target.select()} />
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={copy}>
-                {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
-                Copiar
-              </Button>
-              <Button variant="outline" render={<a href={whatsappHref} target="_blank" rel="noopener noreferrer" />}>
-                <MessageCircle data-icon="inline-start" />
-                WhatsApp
-              </Button>
-              <Button render={<a href={path} target="_blank" rel="noopener noreferrer" />}>
-                <ExternalLink data-icon="inline-start" />
-                Abrir
-              </Button>
-            </div>
-          </div>
           <dl className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg border p-3">
               <dt className="text-xs text-muted-foreground">Agendamentos online (30 dias)</dt>
