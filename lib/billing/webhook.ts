@@ -1,27 +1,98 @@
-import { timingSafeEqual } from "node:crypto"
+import { createHash, timingSafeEqual } from "node:crypto"
 
 import { processPromoPriceSync } from "@/lib/billing/launch-promo"
 import { processAsaasEvent, recordAsaasEvent, type AsaasEvent, type BillingDb } from "@/lib/billing/process-asaas-event"
 
 export type WebhookAuthResult = "ok" | "server_token_missing" | "header_missing" | "token_mismatch"
 
+/** Ajustes aplicados ao normalizar um token; vão para o log para mostrar de onde veio a diferença. */
+export type TokenAdjustment = "espacos" | "invisiveis" | "aspas" | "prefixo_variavel"
+
+export type NormalizedToken = { value: string; adjustments: TokenAdjustment[] }
+
+// Zero-width space/joiners, word joiner e BOM: vêm junto ao copiar de páginas web e o trim() não remove todos.
+const INVISIBLE_CHARS = /[\u200B-\u200D\u2060\uFEFF]/g
+const ENV_PREFIX = /^ASAAS_WEBHOOK_TOKEN\s*=\s*/
+
 /**
- * Compara o cabeçalho `asaas-access-token` com ASAAS_WEBHOOK_TOKEN.
- * Espaços e quebras de linha nas pontas são descartados nos dois lados: é comum o valor
- * ganhar um "\n" ao ser colado no painel da Vercel ou do Asaas, o que derrubava toda a fila com 401.
+ * O authToken do Asaas tem de 32 a 255 caracteres, sem espaços. Então espaços, caracteres invisíveis,
+ * aspas em volta e o nome da variável (quando a linha inteira do .env é colada no painel da Vercel)
+ * nunca fazem parte do token e podem ser descartados sem enfraquecer a validação.
  */
+export function normalizeWebhookToken(raw: string | null | undefined): NormalizedToken {
+  const adjustments: TokenAdjustment[] = []
+  let value = raw ?? ""
+
+  const withoutInvisible = value.replace(INVISIBLE_CHARS, "")
+  if (withoutInvisible !== value) adjustments.push("invisiveis")
+  value = withoutInvisible
+
+  const trimmed = value.trim()
+  if (trimmed !== value) adjustments.push("espacos")
+  value = trimmed
+
+  if (ENV_PREFIX.test(value)) {
+    adjustments.push("prefixo_variavel")
+    value = value.replace(ENV_PREFIX, "").trim()
+  }
+
+  const quote = value[0]
+  if (value.length >= 2 && (quote === '"' || quote === "'") && value.at(-1) === quote) {
+    adjustments.push("aspas")
+    value = value.slice(1, -1).trim()
+  }
+
+  return { value, adjustments }
+}
+
+/** 8 primeiros hex do SHA-256: permite comparar dois tokens nos logs sem revelar nenhum deles. */
+export function tokenFingerprint(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 8)
+}
+
+function safeEqual(a: string, b: string) {
+  const left = Buffer.from(a, "utf8")
+  const right = Buffer.from(b, "utf8")
+  return left.length === right.length && timingSafeEqual(left, right)
+}
+
+/** Compara o cabeçalho `asaas-access-token` com ASAAS_WEBHOOK_TOKEN, ambos normalizados. */
 export function checkWebhookToken(received: string | null, expected: string | undefined): WebhookAuthResult {
-  const server = expected?.trim()
+  const server = normalizeWebhookToken(expected).value
   if (!server) return "server_token_missing"
-  const header = received?.trim()
+  const header = normalizeWebhookToken(received).value
   if (!header) return "header_missing"
-  const a = Buffer.from(header)
-  const b = Buffer.from(server)
-  return a.length === b.length && timingSafeEqual(a, b) ? "ok" : "token_mismatch"
+  return safeEqual(header, server) ? "ok" : "token_mismatch"
 }
 
 export function isValidWebhookToken(received: string | null, expected: string | undefined) {
   return checkWebhookToken(received, expected) === "ok"
+}
+
+function describeToken(label: string, token: NormalizedToken) {
+  if (!token.value) return `${label} ausente`
+  const adjusted = token.adjustments.length ? token.adjustments.join(",") : "nenhum"
+  return `${label} len=${token.value.length} fp=${tokenFingerprint(token.value)} ajustes=${adjusted}`
+}
+
+/**
+ * Linha de diagnóstico da recusa. Contém só tamanhos, impressões digitais curtas e o deploy em
+ * execução; nenhum caractere do token. Se o fp esperado não bater com o do token salvo na Vercel,
+ * o deploy em execução está com um valor antigo (variáveis só valem para deploys feitos depois da alteração).
+ */
+export function describeWebhookRejection(
+  reason: Exclude<WebhookAuthResult, "ok">,
+  received: string | null,
+  expected: string | undefined,
+  runtime: Record<string, string | undefined> = process.env
+) {
+  const deploy = runtime.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local"
+  return [
+    `[billing] webhook Asaas recusado (401): ${reason}`,
+    describeToken("recebido", normalizeWebhookToken(received)),
+    describeToken("esperado", normalizeWebhookToken(expected)),
+    `env=${runtime.VERCEL_ENV ?? "desconhecido"} deploy=${deploy}`,
+  ].join(" | ")
 }
 
 /** Recebe um webhook do Asaas. Separado da rota para ser testado com um banco de teste. */
@@ -32,10 +103,10 @@ export async function handleAsaasWebhook(
   /** Quando informado, restaura na hora o preço integral das promoções concluídas (o cron repete se falhar). */
   priceGateway?: Parameters<typeof processPromoPriceSync>[1]
 ) {
-  const auth = checkWebhookToken(request.headers.get("asaas-access-token"), expectedToken)
+  const received = request.headers.get("asaas-access-token")
+  const auth = checkWebhookToken(received, expectedToken)
   if (auth !== "ok") {
-    // Só o motivo é registrado; nenhum valor de token entra no log.
-    console.error(`[billing] webhook Asaas recusado (401): ${auth}`)
+    console.error(describeWebhookRejection(auth, received, expectedToken))
     return Response.json({ error: "unauthorized" }, { status: 401 })
   }
 
