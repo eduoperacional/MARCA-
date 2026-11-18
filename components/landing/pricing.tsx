@@ -2,7 +2,7 @@ import Link from "next/link"
 import { Check } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { PLAN_FEATURES } from "@/lib/admin/labels"
+import { BASE_PLAN_FAMILY, describePlanFeatures } from "@/lib/admin/labels"
 import { TRIAL_DAYS } from "@/lib/billing/access"
 import { listPublicPlans } from "@/lib/billing/self-service"
 import { db } from "@/lib/db"
@@ -58,10 +58,13 @@ export async function PricingPlans() {
     )
   }
 
+  const hasBasePlan = plans.some((plan) => (plan.family ?? plan.code) === BASE_PLAN_FAMILY)
+
   return (
     <ul className={cn("grid w-full gap-4", plans.length >= 3 ? "md:grid-cols-3" : "md:grid-cols-2 md:max-w-3xl")}>
       {plans.map((plan) => {
         const highlight = plan.isRecommended
+        const benefits = describePlanFeatures(plan.family ?? plan.code, plan.features, hasBasePlan)
         return (
           <li
             key={plan.id}
@@ -85,12 +88,12 @@ export async function PricingPlans() {
               <span className="font-heading text-4xl font-semibold tracking-tight">{formatCurrency(plan.priceCents / 100, true)}</span>
               <span className="text-sm text-muted-foreground">/mês</span>
             </p>
-            {plan.features.length > 0 && (
+            {benefits.length > 0 && (
               <ul className="flex flex-col gap-3 text-sm">
-                {plan.features.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2.5">
+                {benefits.map((benefit) => (
+                  <li key={benefit} className="flex items-start gap-2.5">
                     <Check className="mt-0.5 size-4 shrink-0 text-brand-light" aria-hidden />
-                    <span>{PLAN_FEATURES[feature] ?? feature}</span>
+                    <span>{benefit}</span>
                   </li>
                 ))}
               </ul>

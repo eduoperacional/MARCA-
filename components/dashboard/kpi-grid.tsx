@@ -25,7 +25,7 @@ const KPI_ICONS: Record<KpiId, LucideIcon> = {
   cancellations: CalendarX2,
 }
 
-function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
+function KpiCard({ kpi, highlight, size = "default" }: { kpi: KpiMetric; highlight?: boolean; size?: "default" | "lg" }) {
   const Icon = KPI_ICONS[kpi.id]
   const change =
     kpi.format === "percent"
@@ -43,12 +43,12 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
   return (
     <Card
       className={cn(
-        "gap-0 py-0 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:ring-primary/30 motion-reduce:transition-none motion-reduce:hover:translate-y-0",
+        "h-full gap-0 py-0 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:ring-primary/30 motion-reduce:transition-none motion-reduce:hover:translate-y-0",
         highlight &&
           "bg-brand-gradient ring-0 shadow-[0_12px_40px_-12px_rgb(123_63_242/0.7)]"
       )}
     >
-      <CardContent className="flex flex-col gap-4 p-4">
+      <CardContent className={cn("flex h-full flex-col justify-between gap-4 p-4", size === "lg" && "gap-6 p-5")}>
         <div className="flex items-center justify-between gap-2">
           <span
             className={cn(
@@ -82,7 +82,8 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
         <div className="flex flex-col gap-1">
           <span
             className={cn(
-              "font-heading text-2xl font-semibold tracking-tight tabular-nums",
+              "truncate font-heading text-xl font-semibold tracking-tight tabular-nums sm:text-2xl",
+              size === "lg" && "text-3xl sm:text-4xl",
               highlight && "text-white"
             )}
           >
@@ -91,6 +92,7 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
           <span
             className={cn(
               "text-xs text-muted-foreground",
+              size === "lg" && "text-sm",
               highlight && "text-white/80"
             )}
           >
@@ -105,15 +107,26 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
   )
 }
 
+const PRIMARY_KPIS: KpiId[] = ["revenue", "appointments"]
+
 export function KpiGrid({ kpis }: { kpis: KpiMetric[] }) {
+  const primary = PRIMARY_KPIS.map((id) => kpis.find((kpi) => kpi.id === id)).filter(
+    (kpi): kpi is KpiMetric => Boolean(kpi)
+  )
+  const secondary = kpis.filter((kpi) => !PRIMARY_KPIS.includes(kpi.id))
+
   return (
-    <section
-      aria-label="Indicadores principais"
-      className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
-    >
-      {kpis.map((kpi) => (
-        <KpiCard key={kpi.id} kpi={kpi} highlight={kpi.id === "appointments"} />
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" role="list" aria-label="Indicadores principais">
+      {primary.map((kpi) => (
+        <div key={kpi.id} role="listitem" className="col-span-2">
+          <KpiCard kpi={kpi} highlight={kpi.id === "revenue"} size="lg" />
+        </div>
       ))}
-    </section>
+      {secondary.map((kpi) => (
+        <div key={kpi.id} role="listitem" className="min-w-0">
+          <KpiCard kpi={kpi} />
+        </div>
+      ))}
+    </div>
   )
 }
