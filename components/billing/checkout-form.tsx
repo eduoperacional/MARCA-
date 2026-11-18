@@ -20,6 +20,24 @@ export type PlanOption = {
   limits: string[]
 }
 
+export type CheckoutPromo = {
+  discountPercent: number
+  discountedCycles: number
+  remaining: number
+  planFamilies: string[]
+  billingIntervals: ("month" | "year")[]
+}
+
+function promoPriceFor(promo: CheckoutPromo | null, plan: PlanOption) {
+  if (!promo) return null
+  const applies =
+    (promo.planFamilies.length === 0 || promo.planFamilies.includes(plan.family)) && promo.billingIntervals.includes(plan.interval)
+  return applies ? Math.round((plan.priceCents * (100 - promo.discountPercent)) / 100) : null
+}
+
+const cycleWord = (interval: "month" | "year", n: number) =>
+  interval === "year" ? (n === 1 ? "ano" : "anos") : n === 1 ? "mês" : "meses"
+
 const METHOD_LABEL: Record<string, { label: string; hint: string }> = {
   PIX: { label: "Pix", hint: "Confirmação em segundos" },
   BOLETO: { label: "Boleto", hint: "Compensa em até 3 dias úteis" },
@@ -35,13 +53,16 @@ export function CheckoutForm({
   currentPlanId,
   mode,
   trialNote,
+  promo = null,
 }: {
   plans: PlanOption[]
   methods: string[]
   currentPlanId: string | null
   mode: "checkout" | "change"
   trialNote: string | null
+  promo?: CheckoutPromo | null
 }) {
+  const activePromo = mode === "checkout" ? promo : null
   const hasYearly = plans.some((p) => p.interval === "year")
   const current = plans.find((p) => p.id === currentPlanId)
   const [interval, setInterval] = useState<"month" | "year">(current?.interval ?? "month")
@@ -54,6 +75,19 @@ export function CheckoutForm({
 
   return (
     <div className="flex flex-col gap-8">
+      {activePromo && (
+        <div className="flex flex-col gap-1 rounded-xl border border-primary/40 bg-primary/10 p-4">
+          <p className="text-sm font-semibold text-foreground">
+            Promoção de lançamento: {activePromo.discountPercent}% de desconto nos {activePromo.discountedCycles} primeiros
+            pagamentos
+          </p>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Depois dos dias grátis, você paga {activePromo.discountPercent}% a menos nas {activePromo.discountedCycles} primeiras
+            cobranças. A partir da {activePromo.discountedCycles + 1}ª, o valor volta ao preço normal do plano.{" "}
+            {activePromo.remaining === 1 ? "Resta 1 vaga." : `Restam ${activePromo.remaining} vagas.`}
+          </p>
+        </div>
+      )}
       {hasYearly && (
         <div role="radiogroup" aria-label="Periodicidade" className="flex w-fit gap-1 rounded-full border bg-card p-1">
           {(["month", "year"] as const).map((value) => (
@@ -84,6 +118,8 @@ export function CheckoutForm({
           const isSelected = plan.id === selected
           const monthly = plan.interval === "year" ? monthlyOf(plan.family) : null
           const saving = monthly ? monthly.priceCents * 12 - plan.priceCents : 0
+          const promoPrice = promoPriceFor(activePromo, plan)
+          const per = plan.interval === "year" ? " /ano" : " /mês"
           return (
             <button
               key={plan.id}
@@ -114,12 +150,32 @@ export function CheckoutForm({
                 ) : null}
               </div>
               <div className="flex flex-col">
-                <span className="text-3xl font-semibold tracking-tight text-foreground">
-                  {formatCents(plan.priceCents)}
-                  <span className="text-sm font-normal text-muted-foreground">
-                    {plan.interval === "year" ? " /ano" : " /mês"}
+                {promoPrice !== null && activePromo ? (
+                  <>
+                    <span className="text-sm text-muted-foreground">
+                      <span className="sr-only">Preço normal: </span>
+                      <s>{formatCents(plan.priceCents)}</s>
+                      <span className="ml-2 rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-brand-light">
+                        -{activePromo.discountPercent}%
+                      </span>
+                    </span>
+                    <span className="text-3xl font-semibold tracking-tight text-foreground">
+                      {formatCents(promoPrice)}
+                      <span className="text-sm font-normal text-muted-foreground">{per}</span>
+                    </span>
+                    <span className="text-xs leading-relaxed text-muted-foreground">
+                      Nos {activePromo.discountedCycles} primeiros {cycleWord(plan.interval, activePromo.discountedCycles)}
+                      {" pagos. Depois, "}
+                      {formatCents(plan.priceCents)}
+                      {per}.
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-3xl font-semibold tracking-tight text-foreground">
+                    {formatCents(plan.priceCents)}
+                    <span className="text-sm font-normal text-muted-foreground">{per}</span>
                   </span>
-                </span>
+                )}
                 {saving > 0 && <span className="text-xs text-success">Economia de {formatCents(saving)} por ano</span>}
               </div>
               <ul className="flex flex-col gap-2 text-sm text-muted-foreground">
@@ -147,6 +203,24 @@ export function CheckoutForm({
             <h2 className="font-semibold text-foreground">Pagamento</h2>
             {trialNote && <p className="text-sm leading-relaxed text-muted-foreground">{trialNote}</p>}
           </div>
+          {activePromo && promoPriceFor(activePromo, selectedPlan) !== null && (
+            <dl className="flex flex-col gap-1.5 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">
+                  {activePromo.discountedCycles} primeiras cobranças ({activePromo.discountPercent}% off)
+                </dt>
+                <dd className="font-medium text-foreground">{formatCents(promoPriceFor(activePromo, selectedPlan)!)}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">A partir da {activePromo.discountedCycles + 1}ª cobrança</dt>
+                <dd className="font-medium text-foreground">{formatCents(selectedPlan.priceCents)}</dd>
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Sua vaga fica reservada ao contratar e é confirmada no primeiro pagamento. Se a cobrança não for paga, a
+                vaga é liberada para outro cliente.
+              </p>
+            </dl>
+          )}
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-2 text-xs text-muted-foreground">Forma de pagamento</legend>
             <div className="grid gap-2 sm:grid-cols-3">

@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache"
 import { cleanText, isUuid } from "@/lib/actions/result"
 import { authorizeAdmin, logAdminAction } from "@/lib/admin/auth"
 import { AsaasError, cancelSubscription, toAsaasCycle, updateSubscription } from "@/lib/billing/asaas"
+import { gatewayPriceCents } from "@/lib/billing/launch-promo"
 import {
   addBusinessNote,
   cancelSubscriptionLocal,
@@ -154,7 +155,7 @@ export async function changePlanAction(_: AdminFormState, form: FormData): Promi
   if (sub.gatewaySubscriptionId) {
     try {
       await updateSubscription(sub.gatewaySubscriptionId, {
-        value: plan.priceCents / 100,
+        value: (await gatewayPriceCents(db, sub.id, plan)) / 100,
         cycle: toAsaasCycle(plan.billingInterval),
         description: `MARCAÍ - Plano ${plan.name}`,
       })

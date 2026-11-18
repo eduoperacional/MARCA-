@@ -66,6 +66,8 @@ export async function createLocalSubscription(
     /** Durante o trial: só registra a escolha; o cron cria a assinatura no Asaas ao fim do trial. */
     deferGateway?: boolean
     now?: Date
+    /** Executado na mesma transação logo após inserir a assinatura (ex.: reservar vaga promocional). */
+    afterInsert?: (tx: Parameters<Parameters<BillingDb["transaction"]>[0]>[0], sub: SubscriptionRow) => Promise<void>
   }
 ) {
   const now = input.now ?? new Date()
@@ -131,6 +133,7 @@ export async function createLocalSubscription(
         details: { planId: sub.planId, priceCents: sub.priceCents, billingType: input.billingType ?? null, firstChargeAt: trialEndsAt },
       })
     }
+    if (input.afterInsert) await input.afterInsert(tx, sub)
     return sub
   })
 }

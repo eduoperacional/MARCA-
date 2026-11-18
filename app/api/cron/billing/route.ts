@@ -18,6 +18,10 @@ export async function GET(request: Request) {
       : "[billing-cron] ") +
       `assinaturas encerradas: ${result.updated} | cancelamentos no Asaas: concluídos ${concluded}, ` +
       `falhas nesta execução ${failedAttempts}, pendentes ${pending}, falhas definitivas ${failed}` +
+      ` | promoção: vagas devolvidas ${result.promo.released}` +
+      (result.promo.priceSync
+        ? `, preço integral restaurado ${result.promo.priceSync.synced}, pendentes ${result.promo.priceSync.pending}, falhas definitivas ${result.promo.priceSync.failed}`
+        : "") +
       (configured ? "" : " | ASAAS_API_KEY ausente: filas não processadas")
   )
   return Response.json(result)

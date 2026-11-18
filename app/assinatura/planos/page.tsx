@@ -5,6 +5,7 @@ import { CheckoutForm, type PlanOption } from "@/components/billing/checkout-for
 import { BASE_PLAN_FAMILY, PLAN_LIMITS, describePlanFeatures } from "@/lib/admin/labels"
 import { TRIAL_DAYS, businessTrialEnd } from "@/lib/billing/access"
 import { enabledBillingTypes, isAsaasConfigured } from "@/lib/billing/asaas"
+import { loadLaunchPromoSafe } from "@/lib/billing/launch-promo"
 import { listPublicPlans } from "@/lib/billing/self-service"
 import { getCurrentSubscription, hasHadSubscription, isContracted } from "@/lib/billing/subscriptions"
 import { requireAccess } from "@/lib/business"
@@ -40,6 +41,7 @@ export default async function PlansPage() {
   }))
 
   const mode = sub && isContracted(sub) ? "change" : "checkout"
+  const promo = mode === "checkout" ? await loadLaunchPromoSafe(db, access.business.id) : null
   const trialEnd = businessTrialEnd(access.business)
   const trialNote =
     !hadSub && trialEnd > new Date()
@@ -71,6 +73,15 @@ export default async function PlansPage() {
           currentPlanId={sub?.planId ?? null}
           mode={mode}
           trialNote={trialNote}
+          promo={
+            promo && {
+              discountPercent: promo.discountPercent,
+              discountedCycles: promo.discountedCycles,
+              remaining: promo.remaining,
+              planFamilies: promo.planFamilies,
+              billingIntervals: promo.billingIntervals,
+            }
+          }
         />
       )}
     </>
