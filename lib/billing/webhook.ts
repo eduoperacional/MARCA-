@@ -15,9 +15,9 @@ const INVISIBLE_CHARS = /[\u200B-\u200D\u2060\uFEFF]/g
 const ENV_PREFIX = /^ASAAS_WEBHOOK_TOKEN\s*=\s*/
 
 /**
- * O authToken do Asaas tem de 32 a 255 caracteres, sem espaços. Então espaços, caracteres invisíveis,
- * aspas em volta e o nome da variável (quando a linha inteira do .env é colada no painel da Vercel)
- * nunca fazem parte do token e podem ser descartados sem enfraquecer a validação.
+ * Limpa o valor de ASAAS_WEBHOOK_TOKEN. O authToken do Asaas tem de 32 a 255 caracteres, sem espaços;
+ * espaços, caracteres invisíveis, aspas em volta e o nome da variável (quando a linha inteira do .env
+ * é colada no painel da Vercel) são erros de configuração nossos. Nunca aplicar ao cabeçalho recebido.
  */
 export function normalizeWebhookToken(raw: string | null | undefined): NormalizedToken {
   const adjustments: TokenAdjustment[] = []
@@ -56,23 +56,35 @@ function safeEqual(a: string, b: string) {
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
-/** Compara o cabeçalho `asaas-access-token` com ASAAS_WEBHOOK_TOKEN, ambos normalizados. */
+/**
+ * Compara o cabeçalho `asaas-access-token` com ASAAS_WEBHOOK_TOKEN. Só o valor esperado (configuração
+ * nossa) é normalizado; o cabeçalho é comparado exatamente como chegou, para que qualquer divergência
+ * no que o Asaas envia apareça como recusa em vez de ser corrigida em silêncio.
+ */
 export function checkWebhookToken(received: string | null, expected: string | undefined): WebhookAuthResult {
   const server = normalizeWebhookToken(expected).value
   if (!server) return "server_token_missing"
-  const header = normalizeWebhookToken(received).value
-  if (!header) return "header_missing"
-  return safeEqual(header, server) ? "ok" : "token_mismatch"
+  if (!received) return "header_missing"
+  return safeEqual(received, server) ? "ok" : "token_mismatch"
 }
 
 export function isValidWebhookToken(received: string | null, expected: string | undefined) {
   return checkWebhookToken(received, expected) === "ok"
 }
 
-function describeToken(label: string, token: NormalizedToken) {
-  if (!token.value) return `${label} ausente`
+function describeExpected(raw: string | undefined) {
+  const token = normalizeWebhookToken(raw)
+  if (!token.value) return "esperado ausente"
   const adjusted = token.adjustments.length ? token.adjustments.join(",") : "nenhum"
-  return `${label} len=${token.value.length} fp=${tokenFingerprint(token.value)} ajustes=${adjusted}`
+  return `esperado len=${token.value.length} fp=${tokenFingerprint(token.value)} ajustes=${adjusted}`
+}
+
+/** O cabeçalho entra no log como chegou; `suspeitas` só aponta o que parece sobrar nele, sem corrigir nada. */
+function describeReceived(raw: string | null) {
+  if (!raw) return "recebido ausente"
+  const { adjustments } = normalizeWebhookToken(raw)
+  const suspicious = adjustments.length ? adjustments.join(",") : "nenhuma"
+  return `recebido len=${raw.length} fp=${tokenFingerprint(raw)} suspeitas=${suspicious}`
 }
 
 /**
@@ -89,8 +101,8 @@ export function describeWebhookRejection(
   const deploy = runtime.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local"
   return [
     `[billing] webhook Asaas recusado (401): ${reason}`,
-    describeToken("recebido", normalizeWebhookToken(received)),
-    describeToken("esperado", normalizeWebhookToken(expected)),
+    describeReceived(received),
+    describeExpected(expected),
     `env=${runtime.VERCEL_ENV ?? "desconhecido"} deploy=${deploy}`,
   ].join(" | ")
 }

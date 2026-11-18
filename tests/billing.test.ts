@@ -360,7 +360,7 @@ describe("webhook: autenticação e validação", () => {
   test("classifica o motivo da recusa sem depender do valor do token", () => {
     assert.equal(checkWebhookToken(TOKEN, TOKEN), "ok")
     assert.equal(checkWebhookToken(null, TOKEN), "header_missing")
-    assert.equal(checkWebhookToken("   ", TOKEN), "header_missing")
+    assert.equal(checkWebhookToken("   ", TOKEN), "token_mismatch")
     assert.equal(checkWebhookToken("errado", TOKEN), "token_mismatch")
     assert.equal(checkWebhookToken(TOKEN, undefined), "server_token_missing")
     assert.equal(checkWebhookToken(TOKEN, "  "), "server_token_missing")
@@ -382,14 +382,51 @@ describe("webhook: autenticação e validação", () => {
     assert.equal(checkWebhookToken(TOKEN, `'${TOKEN}'`), "ok")
     assert.equal(checkWebhookToken(TOKEN, `\uFEFF${TOKEN}\u200B`), "ok")
     assert.equal(checkWebhookToken(TOKEN, `ASAAS_WEBHOOK_TOKEN="${TOKEN}"\n`), "ok")
-    assert.equal(checkWebhookToken(`\u200B${TOKEN}`, TOKEN), "ok")
   })
   test("normalização não afrouxa a validação", () => {
     assert.equal(checkWebhookToken(`${TOKEN}x`, TOKEN), "token_mismatch")
     assert.equal(checkWebhookToken(TOKEN.slice(1), TOKEN), "token_mismatch")
     assert.equal(checkWebhookToken(`"${TOKEN}`, TOKEN), "token_mismatch")
     assert.equal(checkWebhookToken(TOKEN, '""'), "server_token_missing")
-    assert.equal(checkWebhookToken("ASAAS_WEBHOOK_TOKEN=", TOKEN), "header_missing")
+    assert.equal(checkWebhookToken("", TOKEN), "header_missing")
+    assert.equal(checkWebhookToken(null, TOKEN), "header_missing")
+  })
+  test("cabeçalho recebido é comparado sem normalização", () => {
+    const rejected = [
+      `"${TOKEN}"`,
+      `'${TOKEN}'`,
+      `ASAAS_WEBHOOK_TOKEN=${TOKEN}`,
+      `ASAAS_WEBHOOK_TOKEN="${TOKEN}"`,
+      `\u200B${TOKEN}`,
+      `${TOKEN}\uFEFF`,
+      `${TOKEN}\u2060`,
+      `\u00EF\u00BB\u00BF${TOKEN}`,
+      ` ${TOKEN}`,
+      `${TOKEN}\n`,
+      "ASAAS_WEBHOOK_TOKEN=",
+    ]
+    for (const header of rejected) {
+      assert.equal(checkWebhookToken(header, TOKEN), "token_mismatch", JSON.stringify(header))
+    }
+    assert.equal(checkWebhookToken(TOKEN, TOKEN), "ok")
+  })
+  test("webhook com cabeçalho prefixado ou com invisíveis retorna 401 sem processar", async () => {
+    const original = console.error
+    const logs: string[] = []
+    console.error = (...args: unknown[]) => void logs.push(args.map(String).join(" "))
+    try {
+      // HTTP headers are Latin-1: a UTF-8 BOM sent by the client arrives as "ï»¿".
+      for (const header of [`ASAAS_WEBHOOK_TOKEN=${TOKEN}`, `"${TOKEN}"`, `\u00EF\u00BB\u00BF${TOKEN}`]) {
+        const response = await webhook({ id: `evt-${header.length}`, event: "PAYMENT_CREATED" }, header)
+        assert.equal(response.status, 401)
+      }
+    } finally {
+      console.error = original
+    }
+    assert.ok(logs.some((l) => l.includes("suspeitas=prefixo_variavel")))
+    assert.ok(logs.some((l) => l.includes("suspeitas=aspas")))
+    assert.equal(logs.filter((l) => l.includes("token_mismatch")).length, 3)
+    assert.ok(logs.every((l) => !l.includes(TOKEN)))
   })
   test("normalizeWebhookToken informa os ajustes feitos", () => {
     assert.deepEqual(normalizeWebhookToken(` "${TOKEN}"\n`), { value: TOKEN, adjustments: ["espacos", "aspas"] })
@@ -401,7 +438,7 @@ describe("webhook: autenticação e validação", () => {
       VERCEL_ENV: "production",
       VERCEL_GIT_COMMIT_SHA: "abcdef1234567",
     })
-    assert.ok(line.includes(`recebido len=${received.length} fp=${tokenFingerprint(received)} ajustes=nenhum`))
+    assert.ok(line.includes(`recebido len=${received.length} fp=${tokenFingerprint(received)} suspeitas=nenhuma`))
     assert.ok(line.includes(`esperado len=${TOKEN.length} fp=${tokenFingerprint(TOKEN)} ajustes=aspas`))
     assert.ok(line.includes("env=production deploy=abcdef1"))
     assert.ok(!line.includes(received))
