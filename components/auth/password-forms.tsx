@@ -45,7 +45,7 @@ export function ForgotPasswordForm({ emailEnabled }: { emailEnabled: boolean }) 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-5" noValidate>
       {!emailEnabled && (
-        <FormAlert message="O envio de e-mails ainda não está configurado neste ambiente. O link de redefinição será registrado apenas nos logs do servidor." />
+        <FormAlert message="A recuperação de senha por e-mail está temporariamente indisponível. Tente novamente mais tarde ou fale com o suporte." />
       )}
       <FormAlert message={error} />
       <div className="flex flex-col gap-2">
