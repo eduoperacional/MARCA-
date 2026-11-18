@@ -125,6 +125,54 @@
   }
 }
 
+@layer utilities {
+  .landing-grid {
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.04) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 40%, transparent 100%);
+  }
+  .text-brand-shine {
+    background-image: linear-gradient(100deg, #ffffff 0%, #d9c4ff 40%, #9d6bff 70%, #7b3ff2 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .animate-float {
+    animation: landing-float 7s ease-in-out infinite;
+  }
+  .animate-float-slow {
+    animation: landing-float 9s ease-in-out infinite;
+    animation-delay: -3s;
+  }
+  .animate-glow {
+    animation: landing-glow 6s ease-in-out infinite;
+  }
+}
+
+@keyframes landing-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes landing-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.06);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
