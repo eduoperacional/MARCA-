@@ -31,7 +31,7 @@ import {
 } from "@/lib/billing/self-service"
 import { isPlanAvailableTo } from "@/lib/billing/test-plan"
 import { GATEWAY_CANCEL_MAX_ATTEMPTS, runBillingMaintenance } from "@/lib/billing/subscriptions"
-import { handleAsaasWebhook } from "@/lib/billing/webhook"
+import { checkWebhookToken, handleAsaasWebhook } from "@/lib/billing/webhook"
 import * as schema from "@/lib/db/schema"
 
 const TOKEN = "token-de-teste-123"
@@ -334,6 +334,42 @@ describe("webhook: autenticação e validação", () => {
       undefined
     )
     assert.equal(res.status, 401)
+  })
+  test("token correto passa da autenticação", async () => {
+    const res = await webhook({ id: "evt_auth_ok", event: "PAYMENT_RECEIVED", payment: { id: "pay_auth_ok", value: 10 } })
+    assert.equal(res.status, 200)
+  })
+  test("token com espaço ou quebra de linha nas pontas é aceito", async () => {
+    const res = await handleAsaasWebhook(
+      db,
+      new Request("http://x", {
+        method: "POST",
+        headers: { "asaas-access-token": ` ${TOKEN} ` },
+        body: JSON.stringify({ id: "evt_auth_trim", event: "PAYMENT_RECEIVED", payment: { id: "pay_auth_trim", value: 10 } }),
+      }),
+      `${TOKEN}\n`
+    )
+    assert.equal(res.status, 200)
+  })
+  test("classifica o motivo da recusa sem depender do valor do token", () => {
+    assert.equal(checkWebhookToken(TOKEN, TOKEN), "ok")
+    assert.equal(checkWebhookToken(null, TOKEN), "header_missing")
+    assert.equal(checkWebhookToken("   ", TOKEN), "header_missing")
+    assert.equal(checkWebhookToken("errado", TOKEN), "token_mismatch")
+    assert.equal(checkWebhookToken(TOKEN, undefined), "server_token_missing")
+    assert.equal(checkWebhookToken(TOKEN, "  "), "server_token_missing")
+  })
+  test("log da recusa não contém o token", async () => {
+    const logs: string[] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => void logs.push(args.map(String).join(" "))
+    try {
+      await webhook({ id: "x", event: "PAYMENT_CREATED" }, "token-recebido-secreto")
+    } finally {
+      console.error = original
+    }
+    assert.ok(logs.some((l) => l.includes("token_mismatch")))
+    assert.ok(logs.every((l) => !l.includes("token-recebido-secreto") && !l.includes(TOKEN)))
   })
   test("payload inválido retorna 400", async () => {
     assert.equal((await webhook({ foo: 1 })).status, 400)
