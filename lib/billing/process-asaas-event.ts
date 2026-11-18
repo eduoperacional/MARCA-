@@ -3,6 +3,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core"
 
 import * as schema from "@/lib/db/schema"
 import type { SubscriptionRow, SubscriptionStatus, TransactionStatus } from "@/lib/db/schema"
+import { registerPromoPayment } from "@/lib/billing/launch-promo"
 
 const { billingTransactions, billingWebhookEvents, plans, subscriptionEvents, subscriptions } = schema
 
@@ -285,6 +286,9 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
     // Plano de teste (maxPayments: 1): a cobrança única cobre um período e o acesso termina
     // no fim dele pela rotina diária, independentemente de eventos de encerramento do Asaas.
     const singleCharge = await isTestPlan(tx, sub.planId)
+    // becameApproved só é verdadeiro uma vez por transição; o registro da promoção ainda marca a cobrança
+    // (promo_cycle) para nunca contar o mesmo ciclo duas vezes.
+    await registerPromoPayment(tx, sub, { gatewayTransactionId: payment.id, amountCents }, paidAt ?? new Date())
     await setSubscriptionStatus(
       tx,
       sub,

@@ -1,8 +1,17 @@
 import { and, asc, desc, eq, isNull, lt, lte, or, sql } from "drizzle-orm"
 
 import * as schema from "@/lib/db/schema"
-import type { BillingInterval, PlanRow, SubscriptionRow } from "@/lib/db/schema"
+import type { BillingInterval, PlanRow, PromoRedemptionRow, SubscriptionRow } from "@/lib/db/schema"
 import { businessTrialEnd } from "@/lib/billing/access"
+import {
+  PROMO_HOLD_MS,
+  discountedCents,
+  extendPromoHold,
+  gatewayPriceCents,
+  processPromoPriceSync,
+  releaseAbandonedPromoReservations,
+  reservePromoSlot,
+} from "@/lib/billing/launch-promo"
 import { ASAAS, parseAsaasDate, reprocessFailedEvents, type BillingDb } from "@/lib/billing/process-asaas-event"
 import {
   attachGatewaySubscription,
@@ -188,6 +197,10 @@ export async function startCheckout(
   const trialEnd = businessTrialEnd(input.business)
   const inTrial = !(await hasHadSubscription(db, input.business.id)) && trialEnd > now
 
+  // A vaga da promoção é reservada na mesma transação da assinatura e segura até alguns dias após
+  // a primeira cobrança (fim do trial ou agora). Sem pagamento nesse prazo, a vaga volta.
+  const firstChargeAt = inTrial ? trialEnd : now
+  let promo: PromoRedemptionRow | null = null
   let sub: SubscriptionRow
   try {
     sub = await createLocalSubscription(db, {
@@ -198,6 +211,14 @@ export async function startCheckout(
       billingType: input.billingType,
       deferGateway: inTrial,
       now,
+      afterInsert: async (tx, created) => {
+        promo = await reservePromoSlot(tx, {
+          sub: created,
+          plan,
+          now,
+          holdUntil: new Date(firstChargeAt.getTime() + PROMO_HOLD_MS),
+        })
+      },
     })
   } catch (error) {
     const code = (error as { code?: string; cause?: { code?: string } })?.code ?? (error as { cause?: { code?: string } })?.cause?.code
@@ -207,15 +228,17 @@ export async function startCheckout(
 
   // Durante o trial nada é criado no Asaas: criar a assinatura gera a primeira cobrança (e o
   // QR Code Pix) na hora, mesmo com vencimento futuro. O cron a cria ao fim do trial.
+  const reserved = promo as PromoRedemptionRow | null
   if (sub.gatewayActivationStatus === "pending") {
-    return { subscription: sub, plan, pendingTransactionId: null }
+    return { subscription: sub, plan, promo: reserved, pendingTransactionId: null }
   }
 
+  const valueCents = reserved ? discountedCents(plan.priceCents, reserved.discountPercent) : plan.priceCents
   let gatewaySub: { id: string }
   try {
     gatewaySub = await gateway.createSubscription({
       customer: customerId,
-      value: plan.priceCents / 100,
+      value: valueCents / 100,
       nextDueDate: brazilDate(now),
       cycle: cycle(plan.billingInterval),
       description: planDescription(plan, plan.billingInterval),
@@ -234,7 +257,7 @@ export async function startCheckout(
     console.error("[billing] falha ao listar cobranças", error)
     return []
   })
-  return { subscription: linked, plan, pendingTransactionId: pending[0]?.id ?? null }
+  return { subscription: linked, plan, promo: reserved, pendingTransactionId: pending[0]?.id ?? null }
 }
 
 export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub: SubscriptionRow, planId: string, actor: Actor) {
@@ -249,9 +272,10 @@ export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub
   if (plan.id === sub.planId) throw new BillingRuleError("Este já é o seu plano atual.")
 
   // No trial ainda não há assinatura no Asaas: a troca só muda o plano que o cron vai contratar.
+  // Durante a promoção, o novo plano também recebe o desconto nos ciclos restantes (se for elegível).
   if (sub.gatewaySubscriptionId) {
     await gateway.updateSubscription(sub.gatewaySubscriptionId, {
-      value: plan.priceCents / 100,
+      value: (await gatewayPriceCents(db, sub.id, plan)) / 100,
       cycle: cycle(plan.billingInterval),
       description: planDescription(plan, plan.billingInterval),
     })
@@ -363,15 +387,21 @@ export async function processGatewayActivations(
 async function activateOne(db: BillingDb, gateway: CheckoutGateway, claimed: SubscriptionRow, now: Date, retryDelayMs: number) {
   if (!claimed.gatewayCustomerId) throw new Error("Assinatura sem cliente no Asaas.")
   const customer = claimed.gatewayCustomerId
-  const [plan] = await db.select({ name: plans.name }).from(plans).where(eq(plans.id, claimed.planId)).limit(1)
+  const [plan] = await db.select().from(plans).where(eq(plans.id, claimed.planId)).limit(1)
   const name = plan?.name ?? "MARCAÍ"
+  const priceFor = async (row: SubscriptionRow) => {
+    const [p] = await db.select().from(plans).where(eq(plans.id, row.planId)).limit(1)
+    if (!p) return row.priceCents
+    return gatewayPriceCents(db, row.id, { ...p, priceCents: row.priceCents, billingInterval: row.billingInterval })
+  }
+  const valueCents = await priceFor(claimed)
 
   const gatewaySubscriptionId = await withRetry(async () => {
     const existing = await gateway.findSubscriptionByReference(claimed.id)
     if (existing) return existing.id
     const created = await gateway.createSubscription({
       customer,
-      value: claimed.priceCents / 100,
+      value: valueCents / 100,
       // O trial acabou: a primeira cobrança vence hoje (o Asaas não aceita vencimento no passado).
       nextDueDate: brazilDate(claimed.trialEndsAt && claimed.trialEndsAt > now ? claimed.trialEndsAt : now),
       cycle: cycle(claimed.billingInterval),
@@ -402,6 +432,7 @@ async function activateOne(db: BillingDb, gateway: CheckoutGateway, claimed: Sub
       )
       .returning()
     if (row) {
+      await extendPromoHold(tx, row.id, now)
       await tx.insert(subscriptionEvents).values({
         subscriptionId: row.id,
         businessId: row.businessId,
@@ -441,7 +472,7 @@ async function activateOne(db: BillingDb, gateway: CheckoutGateway, claimed: Sub
     const [current] = await db.select({ name: plans.name }).from(plans).where(eq(plans.id, attached.planId)).limit(1)
     await gateway
       .updateSubscription(gatewaySubscriptionId, {
-        value: attached.priceCents / 100,
+        value: (await priceFor(attached)) / 100,
         cycle: cycle(attached.billingInterval),
         description: planDescription({ name: current?.name ?? name }, attached.billingInterval),
       })
@@ -457,7 +488,10 @@ async function activateOne(db: BillingDb, gateway: CheckoutGateway, claimed: Sub
 export async function runBillingCron(db: BillingDb, now = new Date(), gateway?: CheckoutGateway) {
   const activation = gateway ? await processGatewayActivations(db, gateway, now) : null
   const maintenance = await runBillingMaintenance(db, now, gateway)
-  return { activation, ...maintenance }
+  // Depois da manutenção: trials expirados nesta execução também devolvem a vaga.
+  const promoReleased = await releaseAbandonedPromoReservations(db, now)
+  const promoPriceSync = gateway ? await processPromoPriceSync(db, gateway, now) : null
+  return { activation, ...maintenance, promo: { released: promoReleased, priceSync: promoPriceSync } }
 }
 
 export async function cancelOwnSubscription(

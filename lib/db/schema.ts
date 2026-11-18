@@ -458,6 +458,54 @@ export const billingTransactions = pgTable("billing_transactions", {
   invoiceUrl: text("invoice_url"),
   bankSlipUrl: text("bank_slip_url"),
   paidAt: timestamp("paid_at", { withTimezone: true }),
+  /** Ciclo promocional (1, 2...) já contabilizado por esta cobrança; evita contar o desconto duas vezes. */
+  promoCycle: integer("promo_cycle"),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const promoCampaigns = pgTable("promo_campaigns", {
+  code: text("code").primaryKey(),
+  name: text("name").notNull(),
+  discountPercent: integer("discount_percent").notNull(),
+  discountedCycles: integer("discounted_cycles").notNull(),
+  maxRedemptions: integer("max_redemptions").notNull(),
+  planFamilies: text("plan_families").array().notNull().default([]),
+  billingIntervals: text("billing_intervals").array().$type<BillingInterval[]>().notNull().default(["month"]),
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull().defaultNow(),
+  endsAt: timestamp("ends_at", { withTimezone: true }),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * reserved: vaga segurada por um checkout ainda sem pagamento; confirmed: primeiro pagamento aprovado;
+ * completed: ciclos com desconto esgotados; released: vaga devolvida (checkout abandonado ou encerrado).
+ */
+export type PromoRedemptionStatus = "reserved" | "confirmed" | "completed" | "released"
+export type PromoPriceSyncStatus = "pending" | "done" | "failed"
+
+export const promoRedemptions = pgTable("promo_redemptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  campaignCode: text("campaign_code").notNull(),
+  businessId: uuid("business_id").notNull(),
+  subscriptionId: uuid("subscription_id").notNull(),
+  status: text("status").$type<PromoRedemptionStatus>().notNull(),
+  discountPercent: integer("discount_percent").notNull(),
+  discountedCycles: integer("discounted_cycles").notNull(),
+  paidCycles: integer("paid_cycles").notNull().default(0),
+  reservedAt: timestamp("reserved_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  releasedAt: timestamp("released_at", { withTimezone: true }),
+  releaseReason: text("release_reason"),
+  priceSyncStatus: text("price_sync_status").$type<PromoPriceSyncStatus>(),
+  priceSyncAttempts: integer("price_sync_attempts").notNull().default(0),
+  priceSyncLastError: text("price_sync_last_error"),
+  priceSyncLastAttemptAt: timestamp("price_sync_last_attempt_at", { withTimezone: true }),
+  priceSyncedAt: timestamp("price_synced_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 })
@@ -507,3 +555,5 @@ export const adminAuditLog = pgTable("admin_audit_log", {
 export type PlanRow = typeof plans.$inferSelect
 export type SubscriptionRow = typeof subscriptions.$inferSelect
 export type BillingTransactionRow = typeof billingTransactions.$inferSelect
+export type PromoCampaignRow = typeof promoCampaigns.$inferSelect
+export type PromoRedemptionRow = typeof promoRedemptions.$inferSelect

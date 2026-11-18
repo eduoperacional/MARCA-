@@ -9,6 +9,14 @@ import { eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 
 import { GRACE_DAYS, TRIAL_DAYS, businessTrialEnd, computeBillingAccess } from "@/lib/billing/access"
+import {
+  LAUNCH_PROMO_CODE,
+  discountedCents,
+  getLaunchPromoStatus,
+  isBusinessEligibleForPromo,
+  processPromoPriceSync,
+  releaseAbandonedPromoReservations,
+} from "@/lib/billing/launch-promo"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
 import {
   brazilDate,
@@ -143,6 +151,8 @@ before(async () => {
     await pg.exec(fs.readFileSync(path.join(dir, file), "utf8"))
   }
   db = drizzle(pg, { schema }) as unknown as BillingDb
+  // A 019 cria a campanha ativa; os testes anteriores à promoção usam preço integral.
+  await pg.exec("UPDATE promo_campaigns SET is_active = false")
 })
 
 async function newBusiness(createdAt = new Date()) {
@@ -1158,5 +1168,123 @@ describe("plano de teste interno descontinuado (012)", () => {
     const paid = await getSub(legacy.id)
     assert.equal(paid.status, "active")
     assert.equal(paid.cancelAtPeriodEnd, true)
+  })
+})
+
+describe("promoção de lançamento", () => {
+  async function resetPromo() {
+    await pg.exec("DELETE FROM promo_redemptions; UPDATE promo_campaigns SET is_active = true WHERE code = 'lancamento'")
+  }
+
+  async function promoCheckout(planCode = "start", createdAt = new Date(Date.now() - 10 * DAY)) {
+    const business = await newBusiness(createdAt)
+    const plan = await planByCode(planCode)
+    const { gateway, calls } = fakeGateway()
+    const result = await startCheckout(db, gateway, {
+      business,
+      user: { id: "u1", email: "dono@teste.com" },
+      planId: plan.id,
+      billingType: "PIX",
+      cpfCnpj: "12345678909",
+    })
+    return { business, plan, gateway, calls, result }
+  }
+
+  async function redemptionOf(subId: string) {
+    const [r] = await db.select().from(schema.promoRedemptions).where(eq(schema.promoRedemptions.subscriptionId, subId))
+    return r
+  }
+
+  test("019 cria a campanha oficial: 30%, 2 ciclos, 10 vagas, Start/Pro/Elite mensais; é idempotente", async () => {
+    await pg.exec(fs.readFileSync(path.join(process.cwd(), "scripts", "019-promocao-lancamento.sql"), "utf8"))
+    const [c] = await db.select().from(schema.promoCampaigns).where(eq(schema.promoCampaigns.code, LAUNCH_PROMO_CODE))
+    assert.equal(c.discountPercent, 30)
+    assert.equal(c.discountedCycles, 2)
+    assert.equal(c.maxRedemptions, 10)
+    assert.deepEqual(c.planFamilies, ["start", "pro", "elite"])
+    assert.deepEqual(c.billingIntervals, ["month"])
+    assert.equal(discountedCents(4990, 30), 3493)
+  })
+
+  test("contratação após o trial: Asaas cobra 30% a menos e a vaga fica reservada", async () => {
+    await resetPromo()
+    const { plan, calls, result } = await promoCheckout()
+    const input = callsFor(calls, result.subscription.id)[0].args[0] as { value: number }
+    assert.equal(input.value, discountedCents(plan.priceCents, 30) / 100)
+    const r = await redemptionOf(result.subscription.id)
+    assert.equal(r.status, "reserved")
+    assert.equal((await getSub(result.subscription.id)).priceCents, plan.priceCents, "preço do plano não é alterado")
+  })
+
+  test("contratação no trial: a assinatura criada pelo cron ao fim do trial já sai com desconto", async () => {
+    await resetPromo()
+    const { plan, gateway, calls, result } = await promoCheckout("pro", new Date())
+    assert.equal(callsFor(calls, result.subscription.id).length, 0)
+    assert.equal((await redemptionOf(result.subscription.id)).status, "reserved")
+    await processGatewayActivations(db, gateway, result.subscription.trialEndsAt!, { retryDelayMs: 0 })
+    const input = callsFor(calls, result.subscription.id)[0].args[0] as { value: number }
+    assert.equal(input.value, discountedCents(plan.priceCents, 30) / 100)
+  })
+
+  test("2 ciclos com desconto (reenvio não conta duas vezes) e depois volta ao preço integral no Asaas", async () => {
+    await resetPromo()
+    const { plan, result } = await promoCheckout()
+    const sub = result.subscription
+    const value = discountedCents(plan.priceCents, 30) / 100
+    const first = paymentEvent("PAYMENT_CONFIRMED", sub, `pay_p1_${sub.id}`, { value })
+    await webhook(first)
+    await webhook({ ...first, id: `evt_${crypto.randomUUID()}` })
+    let r = await redemptionOf(sub.id)
+    assert.equal(r.status, "confirmed")
+    assert.equal(r.paidCycles, 1)
+
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_p2_${sub.id}`, { value }))
+    r = await redemptionOf(sub.id)
+    assert.equal(r.status, "completed")
+    assert.equal(r.paidCycles, 2)
+    assert.equal(r.priceSyncStatus, "pending")
+
+    const { gateway, calls } = fakeGateway()
+    const summary = await processPromoPriceSync(db, gateway)
+    assert.ok(summary.synced >= 1)
+    const update = calls.find((c) => c.op === "updateSubscription" && c.args[0] === sub.gatewaySubscriptionId)!
+    assert.equal((update.args[1] as { value: number }).value, plan.priceCents / 100)
+    assert.equal((await redemptionOf(sub.id)).priceSyncStatus, "done")
+
+    await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_p3_${sub.id}`, { value: plan.priceCents / 100 }))
+    assert.equal((await redemptionOf(sub.id)).paidCycles, 2, "3º ciclo é cobrado sem desconto")
+  })
+
+  test("limite de 10 vagas mesmo com checkouts simultâneos; o 11º paga preço integral", async () => {
+    await resetPromo()
+    const runs = await Promise.all(Array.from({ length: 11 }, () => promoCheckout()))
+    const withPromo = runs.filter((r) => r.result.promo)
+    assert.equal(withPromo.length, 10)
+    const without = runs.find((r) => !r.result.promo)!
+    const input = callsFor(without.calls, without.result.subscription.id)[0].args[0] as { value: number }
+    assert.equal(input.value, without.plan.priceCents / 100)
+    assert.equal(await getLaunchPromoStatus(db), null, "oferta some quando esgota")
+  })
+
+  test("checkout abandonado devolve a vaga após o prazo de reserva", async () => {
+    await resetPromo()
+    const { result } = await promoCheckout()
+    assert.equal((await getLaunchPromoStatus(db))!.remaining, 9)
+    const released = await releaseAbandonedPromoReservations(db, new Date(Date.now() + 6 * DAY))
+    assert.ok(released >= 1)
+    const r = await redemptionOf(result.subscription.id)
+    assert.equal(r.status, "released")
+    assert.equal(r.priceSyncStatus, "pending", "assinatura no Asaas volta ao preço integral")
+    assert.equal((await getLaunchPromoStatus(db))!.remaining, 10)
+  })
+
+  test("planos anuais e clientes que já assinaram não recebem a promoção", async () => {
+    await resetPromo()
+    const annual = await promoCheckout("pro-anual")
+    assert.equal(annual.result.promo, null)
+
+    const { business } = await promoCheckout()
+    await pg.exec("DELETE FROM promo_redemptions")
+    assert.equal(await isBusinessEligibleForPromo(db, business.id), false)
   })
 })

@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto"
 
+import { processPromoPriceSync } from "@/lib/billing/launch-promo"
 import { processAsaasEvent, recordAsaasEvent, type AsaasEvent, type BillingDb } from "@/lib/billing/process-asaas-event"
 
 export function isValidWebhookToken(received: string | null, expected: string | undefined) {
@@ -10,7 +11,13 @@ export function isValidWebhookToken(received: string | null, expected: string | 
 }
 
 /** Recebe um webhook do Asaas. Separado da rota para ser testado com um banco de teste. */
-export async function handleAsaasWebhook(db: BillingDb, request: Request, expectedToken: string | undefined) {
+export async function handleAsaasWebhook(
+  db: BillingDb,
+  request: Request,
+  expectedToken: string | undefined,
+  /** Quando informado, restaura na hora o preço integral das promoções concluídas (o cron repete se falhar). */
+  priceGateway?: Parameters<typeof processPromoPriceSync>[1]
+) {
   if (!isValidWebhookToken(request.headers.get("asaas-access-token"), expectedToken)) {
     return Response.json({ error: "unauthorized" }, { status: 401 })
   }
@@ -29,5 +36,8 @@ export async function handleAsaasWebhook(db: BillingDb, request: Request, expect
 
   // Falhas de regra de negócio ficam registradas como "failed" e não travam a fila do Asaas.
   const result = await processAsaasEvent(db, recorded.id)
+  if (result === "processed" && priceGateway) {
+    await processPromoPriceSync(db, priceGateway).catch((error) => console.error("[billing] fila de preço promocional", error))
+  }
   return Response.json({ received: true, result })
 }
