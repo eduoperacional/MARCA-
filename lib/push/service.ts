@@ -31,7 +31,7 @@ import {
   type PushRunSummary,
   type PushStore,
 } from "@/lib/push/queue"
-import { isValidVapidKeys, sendWebPush, type VapidKeys } from "@/lib/push/web-push"
+import { isValidVapidKeys, normalizeVapidKeys, sendWebPush, vapidConfigIssues, type VapidKeys } from "@/lib/push/web-push"
 import { localParts } from "@/lib/time"
 
 export const REMINDER_LEAD_OPTIONS = [15, 30, 60, 120, 240, 1440] as const
@@ -49,13 +49,22 @@ export function isMissingTable(error: unknown) {
   return (e?.code ?? e?.cause?.code) === "42P01"
 }
 
+function rawVapidKeys() {
+  return normalizeVapidKeys({
+    publicKey: process.env.VAPID_PUBLIC_KEY,
+    privateKey: process.env.VAPID_PRIVATE_KEY,
+    subject: process.env.VAPID_SUBJECT,
+  })
+}
+
 function vapidKeys(): VapidKeys | null {
-  const keys = {
-    publicKey: process.env.VAPID_PUBLIC_KEY?.trim(),
-    privateKey: process.env.VAPID_PRIVATE_KEY?.trim(),
-    subject: process.env.VAPID_SUBJECT?.trim(),
-  }
+  const keys = rawVapidKeys()
   return isValidVapidKeys(keys) ? keys : null
+}
+
+/** Nomes das variáveis ausentes ou inválidas, sem expor valores. */
+export function getPushConfigIssues() {
+  return vapidConfigIssues(rawVapidKeys())
 }
 
 export function isPushConfigured() {

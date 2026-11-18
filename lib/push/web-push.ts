@@ -70,6 +70,34 @@ export function isValidVapidKeys(keys: Partial<VapidKeys> | null | undefined): k
   return pub.length === 65 && pub[0] === 4 && fromB64url(keys.privateKey).length === 32 && /^(mailto:|https:)/.test(keys.subject)
 }
 
+const unquote = (value: string | undefined) => value?.trim().replace(/^(['"])(.*)\1$/, "$2").trim() || undefined
+
+/**
+ * Normaliza valores colados no painel da Vercel: remove aspas envolventes, aceita `MAILTO:` e
+ * e-mail sem prefixo (vira `mailto:`). Não altera o conteúdo das chaves.
+ */
+export function normalizeVapidKeys(raw: Partial<VapidKeys>): Partial<VapidKeys> {
+  let subject = unquote(raw.subject)
+  if (subject && /^mailto:/i.test(subject)) subject = `mailto:${subject.slice(7).trim()}`
+  else if (subject && /^[^\s@:]+@[^\s@]+$/.test(subject)) subject = `mailto:${subject}`
+  return { publicKey: unquote(raw.publicKey), privateKey: unquote(raw.privateKey), subject }
+}
+
+/** Motivos (sem valores) pelos quais a configuração VAPID é recusada. */
+export function vapidConfigIssues(keys: Partial<VapidKeys>): string[] {
+  const issues: string[] = []
+  if (!keys.publicKey) issues.push("VAPID_PUBLIC_KEY ausente")
+  else {
+    const pub = fromB64url(keys.publicKey)
+    if (pub.length !== 65 || pub[0] !== 4) issues.push("VAPID_PUBLIC_KEY inválida (esperado ponto P-256 de 65 bytes em base64url)")
+  }
+  if (!keys.privateKey) issues.push("VAPID_PRIVATE_KEY ausente")
+  else if (fromB64url(keys.privateKey).length !== 32) issues.push("VAPID_PRIVATE_KEY inválida (esperado 32 bytes em base64url)")
+  if (!keys.subject) issues.push("VAPID_SUBJECT ausente")
+  else if (!/^(mailto:|https:)/.test(keys.subject)) issues.push("VAPID_SUBJECT inválido (use mailto:email ou https://url)")
+  return issues
+}
+
 /** Cabeçalho Authorization no formato `vapid t=<JWT ES256>, k=<chave pública>`. */
 export function vapidAuthorization(endpoint: string, keys: VapidKeys, nowMs = Date.now()) {
   const pub = fromB64url(keys.publicKey)

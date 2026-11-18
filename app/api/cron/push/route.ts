@@ -1,6 +1,6 @@
 import { isAuthorizedCronRequest } from "@/lib/cron-auth"
 import type { PushRunSummary } from "@/lib/push/queue"
-import { enqueueDueReminders, isMissingTable, processPushDeliveries } from "@/lib/push/service"
+import { enqueueDueReminders, getPushConfigIssues, isMissingTable, processPushDeliveries } from "@/lib/push/service"
 
 export const maxDuration = 60
 
@@ -33,13 +33,14 @@ export async function GET(request: Request) {
       total.errors += batch.errors
     } while (batch.configured && batch.claimed === BATCH_SIZE && Date.now() < deadline)
 
+    const configIssues = total.configured ? [] : getPushConfigIssues()
     console.info(
       total.configured
         ? `[push-cron] lembretes ${reminders.queued} | reservadas ${total.claimed} | enviadas ${total.sent} | ` +
             `nova tentativa ${total.retry} | falhas ${total.failed} | ignoradas ${total.skipped} | erros ${total.errors}`
-        : "[push-cron] chaves VAPID ausentes: fila não processada"
+        : `[push-cron] configuração VAPID indisponível: ${configIssues.join("; ")}`
     )
-    return Response.json({ ...total, reminders })
+    return Response.json({ ...total, reminders, ...(total.configured ? {} : { configIssues }) })
   } catch (error) {
     if (isMissingTable(error)) return Response.json({ skipped: "script 017 não executado" })
     console.error("[push-cron] falha", error)
