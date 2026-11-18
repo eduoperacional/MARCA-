@@ -9,6 +9,7 @@ import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { businesses, businessMembers } from "@/lib/db/schema"
 import { effectivePermissions, type MemberRole, type Permission } from "@/lib/permissions"
+import { resolveBusinessSlug } from "@/lib/slug-core"
 
 export const ACTIVE_BUSINESS_COOKIE = "marcai_business"
 export const NO_PERMISSION = "Você não tem permissão para realizar esta ação."
@@ -110,7 +111,5 @@ export async function authorize(permission?: Permission) {
 /** Compatibilidade com as consultas existentes: estabelecimento do usuário logado. */
 export const getCurrentBusiness = cache(async () => (await requireAccess()).business)
 
-export const getBusinessBySlug = cache(async (slug: string) => {
-  const [business] = await db.select().from(businesses).where(eq(businesses.slug, slug)).limit(1)
-  return business ?? null
-})
+/** Aceita o endereço atual ou um endereço antigo (histórico); compare `business.slug` para redirecionar. */
+export const getBusinessBySlug = cache(async (slug: string) => resolveBusinessSlug(db, slug))

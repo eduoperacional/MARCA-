@@ -1,5 +1,5 @@
 import type { Metadata } from "next"
-import { notFound } from "next/navigation"
+import { notFound, permanentRedirect } from "next/navigation"
 import { CalendarOff, MapPin, Phone } from "lucide-react"
 
 import { BookingFlow } from "@/components/booking/booking-flow"
@@ -16,6 +16,7 @@ export async function generateMetadata({ params }: PageProps<"/agendar/[slug]">)
   return {
     title: { absolute: `Agendar horário · ${business.name}` },
     description: `Agende seu horário online em ${business.name}.`,
+    alternates: { canonical: `/agendar/${business.slug}` },
   }
 }
 
@@ -23,6 +24,7 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
   const { slug } = await params
   const business = await getBusinessBySlug(slug)
   if (!business) notFound()
+  if (business.slug !== slug) permanentRedirect(`/agendar/${business.slug}`)
 
   const [services, professionals, blocked] = await Promise.all([
     listServices(business.id),

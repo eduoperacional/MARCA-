@@ -3,7 +3,8 @@ import { and, count, eq, gte } from "drizzle-orm"
 
 import { BookingPageAdmin } from "@/components/booking/booking-page-admin"
 import { HelpHint } from "@/components/help/help-hint"
-import { getCurrentBusiness } from "@/lib/business"
+import { getAccess, getCurrentBusiness } from "@/lib/business"
+import { getSiteUrl } from "@/lib/site-url-server"
 import { db } from "@/lib/db"
 import { appointments } from "@/lib/db/schema"
 import { listAppointments } from "@/lib/queries/appointments"
@@ -13,15 +14,17 @@ export const metadata: Metadata = { title: "Página de agendamento" }
 
 export default async function BookingPageAdminPage() {
   const business = await getCurrentBusiness()
+  const access = await getAccess()
   const today = todayLocal()
   const since = toInstant(addDays(today, -29))
 
-  const [[stats], recent] = await Promise.all([
+  const [[stats], recent, siteUrl] = await Promise.all([
     db
       .select({ total: count() })
       .from(appointments)
       .where(and(eq(appointments.businessId, business.id), eq(appointments.source, "online"), gte(appointments.createdAt, since))),
     listAppointments(business.id, { from: addDays(today, -29), to: addDays(today, 60), order: "desc", limit: 300 }),
+    getSiteUrl(),
   ])
 
   const onlineRecent = recent.filter((a) => a.source === "online").slice(0, 8)
@@ -33,6 +36,8 @@ export default async function BookingPageAdminPage() {
       </div>
       <BookingPageAdmin
       slug={business.slug}
+      siteUrl={siteUrl}
+      canEdit={access?.role === "owner"}
       businessName={business.name}
       settings={{
         onlineBookingEnabled: business.onlineBookingEnabled,

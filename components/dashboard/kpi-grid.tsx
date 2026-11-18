@@ -34,6 +34,7 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
   const isUp = change >= 0
   const isPositive = kpi.lowerIsBetter ? change <= 0 : change >= 0
   const TrendIcon = isUp ? TrendingUp : TrendingDown
+  const noBaseline = kpi.format !== "percent" && kpi.previous === 0
   const changeText =
     kpi.format === "percent"
       ? `${isUp ? "+" : "−"}${formatPercent(Math.abs(change))} p.p.`
@@ -42,7 +43,7 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
   return (
     <Card
       className={cn(
-        "gap-0 py-0",
+        "gap-0 py-0 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:ring-primary/30 motion-reduce:transition-none motion-reduce:hover:translate-y-0",
         highlight &&
           "bg-brand-gradient ring-0 shadow-[0_12px_40px_-12px_rgb(123_63_242/0.7)]"
       )}
@@ -57,17 +58,26 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
           >
             <Icon className="size-4.5" aria-hidden="true" />
           </span>
-          <Badge
-            variant="outline"
-            className={cn(
-              "gap-1 border-transparent",
-              isPositive ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive",
-              highlight && "bg-white/15 text-white"
-            )}
-          >
-            <TrendIcon data-icon="inline-start" aria-hidden="true" />
-            {changeText}
-          </Badge>
+          {noBaseline ? (
+            <Badge
+              variant="outline"
+              className={cn("border-transparent bg-muted text-muted-foreground", highlight && "bg-white/15 text-white")}
+            >
+              Sem comparativo
+            </Badge>
+          ) : (
+            <Badge
+              variant="outline"
+              className={cn(
+                "gap-1 border-transparent",
+                isPositive ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive",
+                highlight && "bg-white/15 text-white"
+              )}
+            >
+              <TrendIcon data-icon="inline-start" aria-hidden="true" />
+              {changeText}
+            </Badge>
+          )}
         </div>
         <div className="flex flex-col gap-1">
           <span
@@ -88,7 +98,7 @@ function KpiCard({ kpi, highlight }: { kpi: KpiMetric; highlight?: boolean }) {
           </span>
         </div>
         <span className="sr-only">
-          Variação de {changeText} em relação ao período anterior
+          {noBaseline ? "Sem dados no período anterior para comparar" : `Variação de ${changeText} em relação ao período anterior`}
         </span>
       </CardContent>
     </Card>
