@@ -50,14 +50,17 @@ export function AppointmentsView({
   tab,
   filters,
   openCreate,
+  focused = null,
 }: {
   appointments: Appointment[]
   options: FormOptions
   tab: Tab
   filters: Filters
   openCreate: boolean
+  focused?: Appointment | null
 }) {
   const [createOpen, setCreateOpen] = useState(openCreate)
+  const [focusOpen, setFocusOpen] = useState(Boolean(focused))
   const [search, setSearch] = useState(filters.q)
   const { pending, setParams } = useUrlParams()
 
@@ -240,6 +243,18 @@ export function AppointmentsView({
       )}
 
       <AppointmentDialog open={createOpen} onOpenChange={handleCreateChange} options={options} />
+      {focused && (
+        <AppointmentDialog
+          key={focused.id}
+          open={focusOpen}
+          onOpenChange={(open) => {
+            setFocusOpen(open)
+            if (!open) setParams({ agendamento: null }, { replace: true })
+          }}
+          options={options}
+          appointment={focused}
+        />
+      )}
     </div>
   )
 }
