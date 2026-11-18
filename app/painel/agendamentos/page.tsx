@@ -3,7 +3,8 @@ import type { Metadata } from "next"
 import { AppointmentsView } from "@/components/appointments/appointments-view"
 import { getCurrentBusiness } from "@/lib/business"
 import { firstParam } from "@/lib/period"
-import { listAppointments, type AppointmentFilters } from "@/lib/queries/appointments"
+import { isUuid } from "@/lib/actions/result"
+import { getAppointment, listAppointments, type AppointmentFilters } from "@/lib/queries/appointments"
 import { getFormOptions } from "@/lib/queries/options"
 import { addDays, isValidLocalDate, todayLocal } from "@/lib/time"
 import type { AppointmentStatus } from "@/lib/types"
@@ -46,7 +47,12 @@ export default async function AppointmentsPage({ searchParams }: PageProps<"/pai
   }
   filters.order = tab === "upcoming" || tab === "today" ? "asc" : "desc"
 
-  const [appointments, options] = await Promise.all([listAppointments(business.id, filters), getFormOptions(business.id)])
+  const focusId = firstParam(params.agendamento)
+  const [appointments, options, focused] = await Promise.all([
+    listAppointments(business.id, filters),
+    getFormOptions(business.id),
+    isUuid(focusId) ? getAppointment(business.id, focusId) : null,
+  ])
 
   return (
     <AppointmentsView
@@ -55,6 +61,7 @@ export default async function AppointmentsPage({ searchParams }: PageProps<"/pai
       tab={tab}
       filters={{ q: query ?? "", status: tabStatus ? "" : (status ?? ""), professional: professionalId ?? "", from: fromParam ?? "", to: toParam ?? "" }}
       openCreate={firstParam(params.novo) === "1"}
+      focused={focused}
     />
   )
 }

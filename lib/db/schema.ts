@@ -198,6 +198,67 @@ export const whatsappDeliveries = pgTable("whatsapp_deliveries", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 })
 
+/* ---------------------------- Notificações push (script 017) ---------------------------- */
+
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  userId: text("user_id").notNull(),
+  endpoint: text("endpoint").notNull(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokedReason: text("revoked_reason"),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const pushPreferences = pgTable(
+  "push_preferences",
+  {
+    businessId: uuid("business_id").notNull(),
+    userId: text("user_id").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    sound: boolean("sound").notNull().default(true),
+    notifyNewBooking: boolean("notify_new_booking").notNull().default(true),
+    notifyCancellation: boolean("notify_cancellation").notNull().default(true),
+    notifyReschedule: boolean("notify_reschedule").notNull().default(true),
+    notifyReminder: boolean("notify_reminder").notNull().default(true),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.businessId, table.userId] })]
+)
+
+export const businessPushSettings = pgTable("business_push_settings", {
+  businessId: uuid("business_id").primaryKey(),
+  remindersEnabled: boolean("reminders_enabled").notNull().default(true),
+  reminderLeadMin: integer("reminder_lead_min").notNull().default(60),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const pushDeliveries = pgTable("push_deliveries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: uuid("business_id").notNull(),
+  subscriptionId: uuid("subscription_id").notNull(),
+  appointmentId: uuid("appointment_id"),
+  event: text("event").$type<"new_booking" | "cancellation" | "reschedule" | "reminder" | "test">().notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  dedupeKey: text("dedupe_key").notNull(),
+  status: text("status").$type<"pending" | "processing" | "sent" | "failed" | "skipped">().notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(5),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  error: text("error"),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+})
+
 /* ------------------------- Contas, equipe e convites ------------------------ */
 
 /** Tabela de usuários do Better Auth (somente leitura pelo app; escrita via Better Auth). */

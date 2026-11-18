@@ -7,6 +7,8 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import Link from "next/link"
 
 import { BillingBanner } from "@/components/billing/billing-banner"
+import { PushBridge } from "@/components/push/push-bridge"
+import { getVapidPublicKey, isPushConfigured } from "@/lib/push/service"
 import { buttonVariants } from "@/components/ui/button"
 import { computeBillingAccess, isBillingEnforced } from "@/lib/billing/access"
 import { getCurrentSubscription, getSuspension } from "@/lib/billing/subscriptions"
@@ -81,6 +83,7 @@ async function DashboardShell({ children }: { children: React.ReactNode }) {
           <BillingBanner billing={billing} isOwner={access.role === "owner"} enforced={isBillingEnforced()} />
           <main className="flex flex-1 flex-col px-4 py-6 md:px-6 lg:px-8 lg:py-8">{children}</main>
         </SidebarInset>
+        <PushBridge publicKey={isPushConfigured() ? getVapidPublicKey() : null} />
       </SidebarProvider>
     </WorkspaceProvider>
   )

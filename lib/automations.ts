@@ -2,6 +2,7 @@ import "server-only"
 
 import { db } from "@/lib/db"
 import { notifications } from "@/lib/db/schema"
+import { enqueueAppointmentPush } from "@/lib/push/service"
 import { enqueueAppointmentNotification } from "@/lib/whatsapp/service"
 
 export type NotificationType =
@@ -66,4 +67,6 @@ export async function notify(input: {
   const event = WHATSAPP_EVENT[input.type]
   if (!event || !input.appointmentId) return
   await enqueueAppointmentNotification({ businessId: input.businessId, appointmentId: input.appointmentId, event })
+  // Push nativo: mesma origem de evento do sino, sem criar outro registro de notificação.
+  await enqueueAppointmentPush({ businessId: input.businessId, appointmentId: input.appointmentId, event })
 }

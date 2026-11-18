@@ -1,5 +1,6 @@
 "use client"
 
+import { useRouter } from "next/navigation"
 import useSWR from "swr"
 import { formatDistanceToNow } from "date-fns"
 import { ptBR } from "date-fns/locale"
@@ -33,6 +34,7 @@ const fetcher = (url: string) =>
   })
 
 export function NotificationsMenu() {
+  const router = useRouter()
   const { data, mutate } = useSWR("/api/notifications", fetcher, { refreshInterval: 30_000 })
   const notifications = data?.notifications ?? []
   const unread = notifications.filter((n) => !n.read).length
@@ -83,7 +85,10 @@ export function NotificationsMenu() {
             notifications.map((n) => {
               const Icon = ICONS[n.type] ?? Info
               return (
-                <DropdownMenuItem key={n.id} onClick={() => !n.read && markAsRead(n.id)} className="items-start gap-3 py-2.5">
+                <DropdownMenuItem key={n.id} onClick={() => {
+                    if (!n.read) markAsRead(n.id)
+                    if (n.appointmentId) router.push(`/painel/agendamentos?agendamento=${n.appointmentId}`)
+                  }} className="items-start gap-3 py-2.5">
                   <span
                     className={cn(
                       "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted",

@@ -40,9 +40,11 @@ interface SettingsValues {
 export function SettingsForm({
   initial,
   notifications,
+  defaultTab = "estabelecimento",
 }: {
   initial: SettingsValues
   notifications: React.ReactNode
+  defaultTab?: string
 }) {
   const router = useRouter()
   const [values, setValues] = useState(initial)
@@ -71,7 +73,7 @@ export function SettingsForm({
         </Button>
       </div>
 
-      <Tabs defaultValue="estabelecimento" className="gap-6">
+      <Tabs defaultValue={defaultTab} className="gap-6">
         <TabsList className="h-auto w-full flex-wrap justify-start sm:w-fit">
           <TabsTrigger value="estabelecimento">Estabelecimento</TabsTrigger>
           <TabsTrigger value="funcionamento">Funcionamento</TabsTrigger>
