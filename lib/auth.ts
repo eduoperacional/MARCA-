@@ -1,10 +1,15 @@
 import "server-only"
 
 import { betterAuth } from "better-auth"
+import { APIError } from "better-auth/api"
 import { nextCookies } from "better-auth/next-js"
 
 import { pool } from "@/lib/db"
 import { isEmailConfigured, sendEmail } from "@/lib/email"
+import { isCurrentLegalAcceptance, LEGAL_ACCEPTANCE_ERROR } from "@/lib/legal"
+import { recordLegalAcceptance } from "@/lib/legal-acceptance"
+
+const SIGN_UP_PATH = "/sign-up/email"
 
 export const auth = betterAuth({
   database: pool,
@@ -118,6 +123,24 @@ export const auth = betterAuth({
         },
       }
     : {}),
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user, context) => {
+          if (context?.path === SIGN_UP_PATH && !isCurrentLegalAcceptance(context.body)) {
+            throw new APIError("BAD_REQUEST", {
+              code: LEGAL_ACCEPTANCE_ERROR,
+              message: "Aceite os Termos de Uso e a Política de Privacidade vigentes para criar a conta.",
+            })
+          }
+          return { data: user }
+        },
+        after: async (user, context) => {
+          if (context?.path === SIGN_UP_PATH) await recordLegalAcceptance(pool, user.id)
+        },
+      },
+    },
+  },
   plugins: [nextCookies()],
 })
 
