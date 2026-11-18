@@ -3,13 +3,15 @@ import "server-only"
 import { drizzle } from "drizzle-orm/node-postgres"
 import { Pool } from "pg"
 
+import { normalizeSslMode } from "./connection-string"
 import * as schema from "./schema"
 
-const connectionString =
+const connectionString = normalizeSslMode(
   process.env.DATABASE_URL ??
-  process.env.POSTGRES_URL ??
-  process.env.DATABASE_URL_UNPOOLED ??
-  process.env.POSTGRES_URL_NON_POOLING
+    process.env.POSTGRES_URL ??
+    process.env.DATABASE_URL_UNPOOLED ??
+    process.env.POSTGRES_URL_NON_POOLING,
+)
 
 if (!connectionString) {
   console.error(
