@@ -3,11 +3,25 @@ import { timingSafeEqual } from "node:crypto"
 import { processPromoPriceSync } from "@/lib/billing/launch-promo"
 import { processAsaasEvent, recordAsaasEvent, type AsaasEvent, type BillingDb } from "@/lib/billing/process-asaas-event"
 
+export type WebhookAuthResult = "ok" | "server_token_missing" | "header_missing" | "token_mismatch"
+
+/**
+ * Compara o cabeçalho `asaas-access-token` com ASAAS_WEBHOOK_TOKEN.
+ * Espaços e quebras de linha nas pontas são descartados nos dois lados: é comum o valor
+ * ganhar um "\n" ao ser colado no painel da Vercel ou do Asaas, o que derrubava toda a fila com 401.
+ */
+export function checkWebhookToken(received: string | null, expected: string | undefined): WebhookAuthResult {
+  const server = expected?.trim()
+  if (!server) return "server_token_missing"
+  const header = received?.trim()
+  if (!header) return "header_missing"
+  const a = Buffer.from(header)
+  const b = Buffer.from(server)
+  return a.length === b.length && timingSafeEqual(a, b) ? "ok" : "token_mismatch"
+}
+
 export function isValidWebhookToken(received: string | null, expected: string | undefined) {
-  if (!expected || !received) return false
-  const a = Buffer.from(received)
-  const b = Buffer.from(expected)
-  return a.length === b.length && timingSafeEqual(a, b)
+  return checkWebhookToken(received, expected) === "ok"
 }
 
 /** Recebe um webhook do Asaas. Separado da rota para ser testado com um banco de teste. */
@@ -18,7 +32,10 @@ export async function handleAsaasWebhook(
   /** Quando informado, restaura na hora o preço integral das promoções concluídas (o cron repete se falhar). */
   priceGateway?: Parameters<typeof processPromoPriceSync>[1]
 ) {
-  if (!isValidWebhookToken(request.headers.get("asaas-access-token"), expectedToken)) {
+  const auth = checkWebhookToken(request.headers.get("asaas-access-token"), expectedToken)
+  if (auth !== "ok") {
+    // Só o motivo é registrado; nenhum valor de token entra no log.
+    console.error(`[billing] webhook Asaas recusado (401): ${auth}`)
     return Response.json({ error: "unauthorized" }, { status: 401 })
   }
 
