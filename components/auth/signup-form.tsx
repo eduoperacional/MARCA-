@@ -45,21 +45,25 @@ export function SignupForm({ redirectTo }: { redirectTo?: string }) {
 
     setError(null)
     startTransition(async () => {
-      const payload = { name, email, password, phone, ...currentLegalAcceptance() }
-      const { data, error } = await signUp.email(payload)
-      if (error) {
-        if (error.status === 429) setError("Muitas tentativas. Aguarde um minuto.")
-        else if (error.code === LEGAL_ACCEPTANCE_ERROR) setError("Os documentos foram atualizados. Recarregue a página e aceite a versão vigente.")
-        else if (error.code === "USER_ALREADY_EXISTS" || error.status === 422) setError("Já existe uma conta com este e-mail. Entre ou recupere a senha.")
-        else setError("Não foi possível criar sua conta. Tente novamente.")
-        return
+      try {
+        const payload = { name, email, password, phone, ...currentLegalAcceptance() }
+        const { data, error } = await signUp.email(payload)
+        if (error) {
+          if (error.status === 429) setError("Muitas tentativas. Aguarde um minuto.")
+          else if (error.code === LEGAL_ACCEPTANCE_ERROR) setError("Os documentos foram atualizados. Recarregue a página e aceite a versão vigente.")
+          else if (error.code === "USER_ALREADY_EXISTS" || error.status === 422) setError("Já existe uma conta com este e-mail. Entre ou recupere a senha.")
+          else setError("Não foi possível criar sua conta. Tente novamente.")
+          return
+        }
+        if (!data?.token) {
+          setNotice("Conta criada. Enviamos um link de confirmação para o seu e-mail.")
+          return
+        }
+        router.replace(safeRedirect(redirectTo, "/onboarding"))
+        router.refresh()
+      } catch {
+        setError("Não foi possível criar sua conta. Verifique sua conexão e tente novamente.")
       }
-      if (!data?.token) {
-        setNotice("Conta criada. Enviamos um link de confirmação para o seu e-mail.")
-        return
-      }
-      router.replace(safeRedirect(redirectTo, "/onboarding"))
-      router.refresh()
     })
   }
 

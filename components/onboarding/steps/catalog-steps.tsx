@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Field, StepGuide, WeekScheduleEditor } from "@/components/onboarding/wizard-ui"
 import type { WizardProfessional, WizardService } from "@/components/onboarding/types"
+import { parseCurrencyInput } from "@/lib/currency-input"
 import { formatCurrency } from "@/lib/format"
 import type { DaySchedule } from "@/lib/types"
 
@@ -29,13 +30,17 @@ function useInlineSave() {
   const run = (save: () => Promise<{ ok: boolean; error?: string }>, onDone: () => void) => {
     setError(null)
     start(async () => {
-      const result = await save()
-      if (!result.ok) {
-        setError(result.error ?? "Não foi possível salvar.")
-        return
+      try {
+        const result = await save()
+        if (!result.ok) {
+          setError(result.error ?? "Não foi possível salvar.")
+          return
+        }
+        onDone()
+        router.refresh()
+      } catch {
+        setError("Não foi possível salvar. Verifique sua conexão e tente novamente.")
       }
-      onDone()
-      router.refresh()
     })
   }
   return { saving, error, run }
@@ -86,14 +91,14 @@ export function ServicesStep({ services, professionalIds, ...nav }: CatalogProps
         onSubmit={(e) => {
           e.preventDefault()
           const f = new FormData(e.currentTarget)
-          const price = Number(String(f.get("price") ?? "").replace(/\./g, "").replace(",", "."))
+          const price = parseCurrencyInput(String(f.get("price") ?? ""))
           run(
             () =>
               saveService({
                 name: String(f.get("name") ?? ""),
                 category: String(f.get("category") ?? ""),
                 description: String(f.get("description") ?? ""),
-                price: Number.isFinite(price) ? price : NaN,
+                price: price ?? NaN,
                 durationMin: Number(f.get("duration") ?? 0),
                 active: true,
                 professionalIds,

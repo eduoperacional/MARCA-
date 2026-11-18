@@ -12,6 +12,7 @@ import type { BillingDb } from "@/lib/billing/process-asaas-event"
 import { allowBookingForPhone, allowBookingFromIp, consumeRateLimit, isPublicBookingBlocked, type QueryExec } from "@/lib/booking-guard"
 import { persistProfessional, persistService } from "@/lib/catalog-links"
 import * as schema from "@/lib/db/schema"
+import { getSetupState, recordSetupChange } from "@/lib/setup-state"
 import type { Permission } from "@/lib/permissions"
 import { BLOCK_NO_PERMISSION, canManageTimeBlock, insertTimeBlock, removeTimeBlock, type BlockActor } from "@/lib/time-blocks"
 
@@ -208,5 +209,51 @@ describe("agendamento público", () => {
     for (let i = 0; i < 5; i++) phoneResults.push(await allowBookingForPhone(exec, b.id, "5511999990000"))
     assert.equal(phoneResults.filter(Boolean).length, 3)
     assert.equal(await allowBookingForPhone(exec, (await newBusiness()).id, "5511999990000"), true)
+  })
+})
+
+describe("progresso persistido do onboarding", () => {
+  test("reflete estabelecimento, catálogo e conclusão após recarregar o estado", async () => {
+    const business = await newBusiness()
+    const hours = Array.from({ length: 7 }, (_, weekday) => ({
+      weekday,
+      active: weekday === 1,
+      start: "09:00",
+      end: "18:00",
+      breakStart: weekday === 1 ? "12:00" : null,
+      breakEnd: weekday === 1 ? "13:00" : null,
+    }))
+
+    await db
+      .update(schema.businesses)
+      .set({
+        segment: "salao",
+        phone: "(11) 98888-7777",
+        address: "Rua de teste, 10",
+        city: "São Paulo",
+        state: "SP",
+        openingHours: hours,
+        onlineBookingEnabled: true,
+      })
+      .where(eq(schema.businesses.id, business.id))
+    await recordSetupChange(db, business.id, { reviewed: ["business", "hours"] })
+
+    let reloaded = await getSetupState(db, business.id)
+    assert.equal(reloaded?.progress.nextStep?.key, "services")
+
+    const service = await newService(business.id)
+    const professional = await newProfessional(business.id)
+    await db.update(schema.professionals).set({ workSchedule: hours }).where(eq(schema.professionals.id, professional.id))
+    await db.insert(schema.professionalServices).values({ professionalId: professional.id, serviceId: service.id })
+    await recordSetupChange(db, business.id, { reviewed: ["rules", "page"] })
+
+    reloaded = await getSetupState(db, business.id)
+    assert.equal(reloaded?.progress.ready, true)
+    assert.equal(reloaded?.progress.steps.find((step) => step.key === "services")?.done, true)
+    assert.equal(reloaded?.progress.steps.find((step) => step.key === "professionals")?.done, true)
+    assert.equal(reloaded?.progress.steps.find((step) => step.key === "page")?.done, true)
+    assert.equal(reloaded?.record?.reviewedSteps.includes("page"), true)
+    assert.ok(reloaded?.record?.readyAt)
+    assert.equal((await db.select().from(schema.businesses).where(eq(schema.businesses.id, business.id)))[0].slug, business.slug)
   })
 })
