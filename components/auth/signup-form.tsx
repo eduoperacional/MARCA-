@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useTransition } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 
 import { FormAlert, safeRedirect } from "@/components/auth/auth-shell"
@@ -9,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { signUp } from "@/lib/auth-client"
+import { currentLegalAcceptance, LEGAL_ACCEPTANCE_ERROR } from "@/lib/legal"
 
 type Errors = Partial<Record<"name" | "email" | "phone" | "password" | "confirm" | "terms", string>>
 
@@ -43,9 +45,11 @@ export function SignupForm({ redirectTo }: { redirectTo?: string }) {
 
     setError(null)
     startTransition(async () => {
-      const { data, error } = await signUp.email({ name, email, password, phone })
+      const payload = { name, email, password, phone, ...currentLegalAcceptance() }
+      const { data, error } = await signUp.email(payload)
       if (error) {
         if (error.status === 429) setError("Muitas tentativas. Aguarde um minuto.")
+        else if (error.code === LEGAL_ACCEPTANCE_ERROR) setError("Os documentos foram atualizados. Recarregue a página e aceite a versão vigente.")
         else if (error.code === "USER_ALREADY_EXISTS" || error.status === 422) setError("Já existe uma conta com este e-mail. Entre ou recupere a senha.")
         else setError("Não foi possível criar sua conta. Tente novamente.")
         return
@@ -71,10 +75,26 @@ export function SignupForm({ redirectTo }: { redirectTo?: string }) {
       <TextField id="confirm" label="Confirmar senha" type="password" autoComplete="new-password" error={errors.confirm} />
       <div className="flex flex-col gap-1">
         <label className="flex items-start gap-2 text-sm leading-relaxed text-muted-foreground">
-          <Checkbox className="mt-0.5" checked={terms} onCheckedChange={(v) => setTerms(Boolean(v))} aria-invalid={Boolean(errors.terms)} />
-          <span>Li e aceito os Termos de Uso e a Política de Privacidade da MARCAÍ.</span>
+          <Checkbox
+            className="mt-0.5"
+            checked={terms}
+            onCheckedChange={(v) => setTerms(Boolean(v))}
+            aria-invalid={Boolean(errors.terms)}
+            aria-describedby={errors.terms ? "terms-error" : undefined}
+          />
+          <span>
+            Li e aceito os{" "}
+            <Link href="/termos" target="_blank" className="font-medium text-brand-light underline-offset-4 hover:underline">
+              Termos de Uso
+            </Link>{" "}
+            e a{" "}
+            <Link href="/privacidade" target="_blank" className="font-medium text-brand-light underline-offset-4 hover:underline">
+              Política de Privacidade
+            </Link>{" "}
+            da MARCAÍ.
+          </span>
         </label>
-        {errors.terms && <p className="text-xs text-destructive">{errors.terms}</p>}
+        {errors.terms && <p id="terms-error" className="text-xs text-destructive">{errors.terms}</p>}
       </div>
       <Button type="submit" size="lg" disabled={pending}>
         {pending ? "Criando conta..." : "Criar conta"}

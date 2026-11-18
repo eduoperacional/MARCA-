@@ -40,6 +40,8 @@ export function LandingFooter() {
           <a href="#planos" className="hover:text-foreground">Planos</a>
           <Link href="/cadastro" className="hover:text-foreground">Criar conta</Link>
           <Link href="/entrar" className="hover:text-foreground">Área do estabelecimento</Link>
+          <Link href="/termos" className="hover:text-foreground">Termos de Uso</Link>
+          <Link href="/privacidade" className="hover:text-foreground">Política de Privacidade</Link>
         </nav>
         <span>© MARCAÍ</span>
       </div>

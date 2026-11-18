@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState, useTransition } from "react"
+import Link from "next/link"
 import useSWR from "swr"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
@@ -51,12 +52,14 @@ const slotsFetcher = async (url: string) => {
 
 export function BookingFlow({
   slug,
+  businessName,
   today,
   openWeekdays,
   services,
   professionals,
 }: {
   slug: string
+  businessName: string
   today: string
   openWeekdays: number[]
   services: PublicService[]
@@ -392,9 +395,28 @@ export function BookingFlow({
               </Field>
               <Field>
                 <FieldLabel htmlFor="booking-notes">Observações (opcional)</FieldLabel>
-                <Textarea id="booking-notes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
+                <Textarea
+                  id="booking-notes"
+                  rows={2}
+                  maxLength={500}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  aria-describedby="booking-notes-hint"
+                />
+                <p id="booking-notes-hint" className="text-xs leading-relaxed text-muted-foreground">
+                  Escreva apenas o necessário para o atendimento. Não inclua informações de saúde, documentos ou outros dados sensíveis.
+                </p>
               </Field>
             </FieldGroup>
+            <p className="rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+              Seus dados são usados para realizar este agendamento. <strong className="font-medium text-foreground">{businessName}</strong> é
+              responsável por eles, e a MARCAÍ os processa para prestar o serviço de agendamento. Seu nome, o serviço e os dados do
+              horário podem ser enviados ao WhatsApp e às notificações do estabelecimento. Saiba mais na{" "}
+              <Link href="/privacidade" target="_blank" className="font-medium text-brand-light underline-offset-4 hover:underline">
+                Política de Privacidade
+              </Link>
+              .
+            </p>
             {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
             <Button type="submit" size="lg" disabled={pending || !name.trim() || !phone.trim()}>
               {pending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Check data-icon="inline-start" />}

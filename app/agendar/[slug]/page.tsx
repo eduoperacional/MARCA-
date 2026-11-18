@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import Link from "next/link"
 import { notFound, permanentRedirect } from "next/navigation"
 import { CalendarOff, MapPin, Phone } from "lucide-react"
 
@@ -70,6 +71,7 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
         ) : (
           <BookingFlow
             slug={business.slug}
+            businessName={business.name}
             today={todayLocal()}
             openWeekdays={business.openingHours.filter((d) => d.active).map((d) => d.weekday)}
             services={bookable.map((s) => ({
@@ -92,7 +94,13 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
           />
         )}
       </main>
-      <footer className="pb-8 text-center text-xs text-muted-foreground">Agendamento por MarcAí</footer>
+      <footer className="flex flex-col items-center gap-2 pb-8 text-center text-xs text-muted-foreground">
+        <span>Agendamento por MarcAí</span>
+        <nav aria-label="Documentos" className="flex gap-4">
+          <Link href="/privacidade" className="hover:text-foreground hover:underline">Política de Privacidade</Link>
+          <Link href="/termos" className="hover:text-foreground hover:underline">Termos de Uso</Link>
+        </nav>
+      </footer>
     </div>
   )
 }
