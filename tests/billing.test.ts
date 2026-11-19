@@ -546,6 +546,49 @@ describe("webhook: eventos de assinatura", () => {
     await webhook({ id: `evt_${crypto.randomUUID()}`, event: "SUBSCRIPTION_DELETED", subscription: { id: sub.gatewaySubscriptionId, externalReference: sub.id } })
     assert.equal((await getSub(sub.id)).status, "canceled")
   })
+
+  for (const event of ["SUBSCRIPTION_DELETED", "SUBSCRIPTION_INACTIVATED"]) {
+    test(`${event} não altera assinatura isenta e continua processando RB Barber`, async () => {
+      const studio = await checkout()
+      const rb = await checkout()
+      const studioSub = studio.result.subscription
+      const rbSub = rb.result.subscription
+
+      await db.update(schema.businesses).set({ billingExempt: true }).where(eq(schema.businesses.id, studio.business.id))
+      await db.update(schema.businesses).set({ name: "RB Barber", slug: "rb-barber" }).where(eq(schema.businesses.id, rb.business.id))
+      await db.update(schema.subscriptions).set({ priceCents: 500 }).where(eq(schema.subscriptions.id, rbSub.id))
+
+      const before = await getSub(studioSub.id)
+      await webhook({
+        id: `evt_${crypto.randomUUID()}`,
+        event,
+        subscription: { id: studioSub.gatewaySubscriptionId, externalReference: studioSub.id },
+      })
+      await webhook({
+        id: `evt_${crypto.randomUUID()}`,
+        event,
+        subscription: { id: rbSub.gatewaySubscriptionId, externalReference: rbSub.id },
+      })
+
+      const after = await getSub(studioSub.id)
+      assert.equal(after.status, before.status)
+      assert.equal(after.canceledAt?.getTime(), before.canceledAt?.getTime())
+      assert.equal(after.endedAt?.getTime(), before.endedAt?.getTime())
+      assert.equal(after.currentPeriodEnd?.getTime(), before.currentPeriodEnd?.getTime())
+      assert.equal(after.cancelAtPeriodEnd, before.cancelAtPeriodEnd)
+
+      const [studioBusiness] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, studio.business.id))
+      assert.equal(studioBusiness.billingExempt, true)
+      assert.equal(computeBillingAccess(studioBusiness, after, new Date()).allowed, true)
+
+      const [rbBusiness] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, rb.business.id))
+      const rbAfter = await getSub(rbSub.id)
+      assert.equal(rbBusiness.billingExempt, false)
+      assert.equal(rbAfter.status, "canceled")
+      assert.ok(rbAfter.endedAt)
+      assert.equal(rbAfter.priceCents, 500)
+    })
+  }
 })
 
 describe("cancelamento pelo dono", () => {

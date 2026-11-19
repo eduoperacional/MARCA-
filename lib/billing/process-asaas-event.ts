@@ -347,7 +347,15 @@ async function handleSubscription(tx: Tx, event: AsaasEvent) {
   const payload = event.subscription
   if (!payload) return "ignored" as const
   const sub = await findSubscription(tx, payload.id, payload.externalReference)
-  if (!sub || sub.status === "canceled" || sub.status === "expired") return "ignored" as const
+  if (!sub) return "ignored" as const
+
+  const [business] = await tx
+    .select({ billingExempt: businesses.billingExempt })
+    .from(businesses)
+    .where(eq(businesses.id, sub.businessId))
+    .limit(1)
+  if (business?.billingExempt) return "processed" as const
+  if (sub.status === "canceled" || sub.status === "expired") return "ignored" as const
 
   const now = new Date()
   const details = { eventId: event.id, event: event.event }
