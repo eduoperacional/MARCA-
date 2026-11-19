@@ -21,6 +21,7 @@ export function isBillingEnforced() {
 }
 
 export type BillingAccessState =
+  | "exempt"
   | "courtesy"
   | "trial"
   | "active"
@@ -41,7 +42,7 @@ export type BillingAccess = {
   notice: string | null
 }
 
-type BusinessLike = { createdAt: Date }
+type BusinessLike = { createdAt: Date; billingExempt?: boolean }
 type SubLike = Pick<
   SubscriptionRow,
   "status" | "trialEndsAt" | "currentPeriodEnd" | "courtesyUntil" | "cancelAtPeriodEnd"
@@ -64,6 +65,10 @@ export function computeBillingAccess(
   now = new Date(),
   trialDays = TRIAL_DAYS
 ): BillingAccess {
+  if (business.billingExempt) {
+    return { state: "exempt", allowed: true, until: null, notice: null }
+  }
+
   const implicitTrialEnd = addDays(business.createdAt, trialDays)
   const paidThrough = sub?.currentPeriodEnd ?? null
   const paidValid = paidThrough !== null && paidThrough > now

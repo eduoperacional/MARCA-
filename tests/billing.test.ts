@@ -809,6 +809,22 @@ describe("cron: fila de cancelamentos no Asaas", () => {
 })
 
 describe("permissões de acesso", () => {
+  test("isenção persistente mantém acesso após trial vencido e inadimplência", () => {
+    const business = { createdAt: new Date(Date.now() - 90 * DAY), billingExempt: true }
+    const pastDue = {
+      status: "past_due" as const,
+      trialEndsAt: new Date(Date.now() - 80 * DAY),
+      currentPeriodEnd: new Date(Date.now() - 60 * DAY),
+      courtesyUntil: null,
+      cancelAtPeriodEnd: false,
+    }
+    const access = computeBillingAccess(business, pastDue, new Date())
+    assert.equal(access.state, "exempt")
+    assert.equal(access.allowed, true)
+    assert.equal(access.until, null)
+    assert.equal(access.notice, null)
+  })
+
   test("assinatura ativa libera; cancelada bloqueia", async () => {
     const { result } = await checkout()
     const sub = result.subscription
@@ -824,8 +840,111 @@ describe("permissões de acesso", () => {
 })
 
 
-describe("regra comercial: 7 dias grátis", () => {
+describe("isenção permanente Studio Bella", () => {
+  test("checkout recusa novas assinaturas sem chamar o Asaas", async () => {
+    const business = await newBusiness()
+    await db.update(schema.businesses).set({ billingExempt: true }).where(eq(schema.businesses.id, business.id))
+    const plan = await anyPlan()
+    const { gateway, calls } = fakeGateway()
 
+    await assert.rejects(
+      startCheckout(db, gateway, {
+        business,
+        user: { id: "u-studio", email: "studio@example.test" },
+        planId: plan.id,
+        billingType: "PIX",
+        cpfCnpj: "12345678909",
+      }),
+      /isento de cobrança/
+    )
+    assert.equal(calls.length, 0)
+  })
+
+  test("trial isento não é ativado no Asaas e não expira pelo cron", async () => {
+    const context = await trialCheckout()
+    const sub = context.result.subscription
+    await db.update(schema.businesses).set({ billingExempt: true }).where(eq(schema.businesses.id, context.business.id))
+    await db.update(schema.subscriptions).set({ trialEndsAt: new Date(Date.now() - 30 * DAY) }).where(eq(schema.subscriptions.id, sub.id))
+
+    await processGatewayActivations(db, context.gateway, new Date(Date.now() + 30 * DAY), { retryDelayMs: 0 })
+    assert.equal(context.calls.filter((call) => call.op === "createSubscription").length, 0)
+    assert.equal((await getSub(sub.id)).gatewayActivationStatus, "pending")
+
+    await runBillingMaintenance(db, new Date(Date.now() + 30 * DAY))
+    assert.equal((await getSub(sub.id)).status, "trialing")
+    assert.equal(computeBillingAccess({ createdAt: context.business.createdAt, billingExempt: true }, await getSub(sub.id), new Date(Date.now() + 30 * DAY)).allowed, true)
+  })
+
+  test("webhooks registram o pagamento, mas não renovam nem alteram a assinatura isenta", async () => {
+    const { business, result } = await checkout()
+    const sub = result.subscription
+    const prior = await getSub(sub.id)
+    await db.update(schema.businesses).set({ billingExempt: true }).where(eq(schema.businesses.id, business.id))
+
+    const paymentId = `pay_exempt_${crypto.randomUUID()}`
+    const response = await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, paymentId))
+    assert.equal((await response.json()).result, "processed")
+    const after = await getSub(sub.id)
+    assert.equal(after.status, prior.status)
+    assert.equal(after.currentPeriodEnd, prior.currentPeriodEnd)
+    const [transaction] = await db
+      .select()
+      .from(schema.billingTransactions)
+      .where(eq(schema.billingTransactions.gatewayTransactionId, paymentId))
+    assert.equal(transaction.status, "approved")
+  })
+
+  test("SQL operacional isola Studio Bella e enfileira apenas a assinatura dela", async () => {
+    const studio = await newBusiness()
+    const rb = await newBusiness()
+    await db.update(schema.businesses).set({ name: "Studio Bella", slug: "studio-bella" }).where(eq(schema.businesses.id, studio.id))
+    await db.update(schema.businesses).set({ name: "RB Barber", slug: "rb-barber" }).where(eq(schema.businesses.id, rb.id))
+    const studioCheckout = await checkout()
+    const rbCheckout = await checkout()
+    await db.update(schema.subscriptions).set({ businessId: studio.id, gatewaySubscriptionId: "asaas_studio_bella" }).where(eq(schema.subscriptions.id, studioCheckout.result.subscription.id))
+    await db.update(schema.subscriptions).set({ businessId: rb.id, gatewaySubscriptionId: "asaas_rb_barber", priceCents: 500 }).where(eq(schema.subscriptions.id, rbCheckout.result.subscription.id))
+    await db.insert(schema.promoRedemptions).values({
+      campaignCode: "lancamento",
+      businessId: studio.id,
+      subscriptionId: studioCheckout.result.subscription.id,
+      status: "reserved",
+      discountPercent: 30,
+      discountedCycles: 2,
+      reservedAt: new Date(Date.now() - 30 * DAY),
+      expiresAt: new Date(Date.now() - 20 * DAY),
+      priceSyncStatus: "pending",
+    })
+    const sqlPath = path.join(process.cwd(), "scripts/manual/studio-bella-billing-exemption.sql")
+
+    await pg.exec(fs.readFileSync(sqlPath, "utf8"))
+
+    const [studioAfter] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, studio.id))
+    const [rbAfter] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, rb.id))
+    const studioSub = await getSub(studioCheckout.result.subscription.id)
+    const rbSub = await getSub(rbCheckout.result.subscription.id)
+    assert.equal(studioAfter.billingExempt, true)
+    assert.equal(studioSub.gatewayCancelStatus, "pending")
+    assert.equal(rbAfter.billingExempt, false)
+    assert.equal(rbSub.gatewayCancelStatus, null)
+    assert.equal(rbSub.priceCents, 500)
+
+    assert.equal(await releaseAbandonedPromoReservations(db, new Date()), 0)
+    const [reservation] = await db.select().from(schema.promoRedemptions).where(eq(schema.promoRedemptions.businessId, studio.id))
+    assert.equal(reservation.status, "reserved")
+    const priceUpdates: string[] = []
+    await processPromoPriceSync(db, { async updateSubscription(id) { priceUpdates.push(id) } })
+    assert.deepEqual(priceUpdates, [])
+
+    const calls: string[] = []
+    await runBillingMaintenance(db, new Date(), { async cancelSubscription(id) { calls.push(id) } })
+    assert.ok(calls.includes("asaas_studio_bella"))
+    assert.ok(!calls.includes("asaas_rb_barber"))
+    assert.equal((await getSub(studioSub.id)).status, "trialing")
+    assert.equal((await getSub(rbSub.id)).gatewayCancelStatus, null)
+  })
+})
+
+describe("regra comercial: 7 dias grátis", () => {
   async function contract(opts: { createdAt?: Date; planId?: string; billingType?: "PIX" | "BOLETO" | "CREDIT_CARD"; now?: Date } = {}) {
     const business = await newBusiness(opts.createdAt ?? new Date())
     const planId = opts.planId ?? (await anyPlan()).id
@@ -1039,7 +1158,7 @@ describe("cobrança criada pelo cron no fim do trial", () => {
   })
 
   test("execuções simultâneas do cron criam uma única assinatura", async () => {
-    const { gateway: _g, result } = await trialCheckout()
+    const { result } = await trialCheckout()
     const sub = result.subscription
     const { gateway, calls } = fakeGateway({ createDelayMs: 30 })
     const runs = await Promise.all(

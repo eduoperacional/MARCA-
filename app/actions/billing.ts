@@ -105,8 +105,10 @@ export async function cancelOwnAction(_: BillingFormState, form: FormData): Prom
 }
 
 export async function refreshPaymentsAction(_: BillingFormState): Promise<BillingFormState> {
+  void _
   const access = await authorizeOwner()
   if (!access) return { ok: false, message: "Somente o proprietário pode atualizar as cobranças." }
+  if (access.business.billingExempt) return { ok: false, message: "Este estabelecimento está isento de cobrança." }
   const sub = await getCurrentSubscription(db, access.business.id)
   if (!sub?.gatewaySubscriptionId) return { ok: false, message: "Nenhuma assinatura vinculada ao gateway." }
   try {

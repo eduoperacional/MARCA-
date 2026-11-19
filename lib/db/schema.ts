@@ -37,6 +37,7 @@ export const businesses = pgTable("businesses", {
   ownerUserId: text("owner_user_id"),
   onboardingStep: integer("onboarding_step").notNull().default(1),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+  billingExempt: boolean("billing_exempt").notNull().default(false),
   createdAt: createdAt(),
 })
 
