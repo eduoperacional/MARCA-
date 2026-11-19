@@ -24,7 +24,8 @@ export default async function BillingPage() {
   const nextCharge = scheduledFirstCharge
     ? sub?.trialEndsAt
     : pending[0]?.dueDate ?? (sub?.cancelAtPeriodEnd ? null : sub?.currentPeriodEnd)
-  const waitingConfirmation = sub && ["awaiting_payment", "payment_pending", "trialing"].includes(sub.status) && pending.length > 0
+  const isBillingExempt = access.business.billingExempt
+  const waitingConfirmation = !isBillingExempt && sub && ["awaiting_payment", "payment_pending", "trialing"].includes(sub.status) && pending.length > 0
 
   return (
     <>
@@ -35,6 +36,12 @@ export default async function BillingPage() {
           Plano, cobranças e histórico de pagamentos do seu estabelecimento.
         </p>
       </div>
+
+      {isBillingExempt && (
+        <div role="status" className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm leading-relaxed text-foreground">
+          Esta conta tem isenção permanente de cobrança. O acesso ao MARCAÍ permanece ativo e nenhuma cobrança ou renovação automática será gerada.
+        </div>
+      )}
 
       {!billing.allowed && (
         <div role="alert" className="flex flex-col gap-1 rounded-xl border border-destructive/40 bg-destructive/10 p-4">
@@ -52,7 +59,7 @@ export default async function BillingPage() {
               Plano atual
             </h2>
             <p className="text-2xl font-semibold text-foreground">
-              {plan ? plan.name : billing.state === "trial" ? "Período de teste" : "Nenhum plano"}
+              {plan ? plan.name : isBillingExempt ? "Isento de cobrança" : billing.state === "trial" ? "Período de teste" : "Nenhum plano"}
             </p>
             {plan && sub && (
               <p className="text-sm text-muted-foreground">
@@ -60,42 +67,44 @@ export default async function BillingPage() {
               </p>
             )}
           </div>
-          {status && <ToneBadge tone={status.tone}>{status.label}</ToneBadge>}
+          {isBillingExempt ? <ToneBadge tone="brand">Isento de cobrança</ToneBadge> : status && <ToneBadge tone={status.tone}>{status.label}</ToneBadge>}
           {!sub && billing.state === "trial" && <ToneBadge tone="brand">Teste grátis</ToneBadge>}
         </div>
 
         <dl className="grid gap-4 text-sm sm:grid-cols-3">
           <div className="flex flex-col gap-1">
             <dt className="text-muted-foreground">
-              {billing.state === "trial" || billing.state === "trial_grace" ? "Teste até" : "Acesso garantido até"}
+              {isBillingExempt ? "Acesso" : billing.state === "trial" || billing.state === "trial_grace" ? "Teste até" : "Acesso garantido até"}
             </dt>
-            <dd className="font-medium text-foreground">{formatDate(billing.until)}</dd>
+            <dd className="font-medium text-foreground">{isBillingExempt ? "Permanente" : formatDate(billing.until)}</dd>
           </div>
           <div className="flex flex-col gap-1">
             <dt className="text-muted-foreground">Próxima cobrança</dt>
-            <dd className="font-medium text-foreground">{contracted ? formatDate(nextCharge) : "—"}</dd>
-            {scheduledFirstCharge && (
+            <dd className="font-medium text-foreground">{isBillingExempt ? "Não haverá cobranças" : contracted ? formatDate(nextCharge) : "—"}</dd>
+            {!isBillingExempt && scheduledFirstCharge && (
               <p className="text-xs leading-relaxed text-muted-foreground">Nada é cobrado antes do fim do teste.</p>
             )}
           </div>
           <div className="flex flex-col gap-1">
             <dt className="text-muted-foreground">Renovação</dt>
             <dd className="font-medium text-foreground">
-              {sub?.cancelAtPeriodEnd ? "Cancelamento agendado" : contracted ? "Automática" : "—"}
+              {isBillingExempt ? "Sem renovação automática" : sub?.cancelAtPeriodEnd ? "Cancelamento agendado" : contracted ? "Automática" : "—"}
             </dd>
           </div>
         </dl>
 
         {isOwner ? (
-          <div className="flex flex-wrap gap-3">
-            <Link href="/assinatura/planos" className={buttonVariants()}>{contracted ? "Mudar de plano" : "Escolher um plano"}</Link>
-          </div>
+          !isBillingExempt && (
+            <div className="flex flex-wrap gap-3">
+              <Link href="/assinatura/planos" className={buttonVariants()}>{contracted ? "Mudar de plano" : "Escolher um plano"}</Link>
+            </div>
+          )
         ) : (
           <p className="text-sm text-muted-foreground">Somente o proprietário pode contratar ou alterar o plano.</p>
         )}
       </section>
 
-      {pending.length > 0 && (
+      {!isBillingExempt && pending.length > 0 && (
         <section aria-labelledby="pendentes" className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 id="pendentes" className="font-semibold text-foreground">
@@ -160,7 +169,7 @@ export default async function BillingPage() {
         )}
       </section>
 
-      {isOwner && sub && contracted && !sub.cancelAtPeriodEnd && (
+      {isOwner && !isBillingExempt && sub && contracted && !sub.cancelAtPeriodEnd && (
         <section aria-labelledby="cancelar" className="flex flex-col gap-3 rounded-xl border p-5">
           <h2 id="cancelar" className="font-semibold text-foreground">
             Cancelar assinatura

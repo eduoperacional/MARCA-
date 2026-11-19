@@ -1,5 +1,8 @@
+import { eq } from "drizzle-orm"
+
 import { computeBillingAccess, isBillingEnforced } from "@/lib/billing/access"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
+import { businesses } from "@/lib/db/schema"
 import { getCurrentSubscription, getSuspension } from "@/lib/billing/subscriptions"
 import { legacyPhoneRateLimitKeys, phoneRateLimitKeys, rateLimitSecret } from "@/lib/rate-limit-keys"
 
@@ -75,6 +78,12 @@ export async function allowBookingForPhone(
 export async function isPublicBookingBlocked(db: BillingDb, business: { id: string; createdAt: Date }, now = new Date()) {
   if (await getSuspension(db, business.id)) return true
   if (!isBillingEnforced()) return false
+  const [billing] = await db
+    .select({ billingExempt: businesses.billingExempt })
+    .from(businesses)
+    .where(eq(businesses.id, business.id))
+    .limit(1)
+  if (billing?.billingExempt) return false
   const sub = await getCurrentSubscription(db, business.id)
   return !computeBillingAccess(business, sub, now).allowed
 }

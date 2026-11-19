@@ -312,8 +312,11 @@ export async function processGatewayCancellations(db: BillingDb, now: Date, gate
   const leaseLimit = new Date(now.getTime() - GATEWAY_CANCEL_LEASE_MS)
   const claimable = and(
     eq(subscriptions.gatewayCancelStatus, "pending"),
-    // canceled: assinatura criada no Asaas ao fim do trial enquanto o cliente cancelava.
-    inArray(subscriptions.status, ["expired", "canceled"]),
+    or(
+      // canceled: assinatura criada no Asaas ao fim do trial enquanto o cliente cancelava.
+      inArray(subscriptions.status, ["expired", "canceled"]),
+      sql`EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${subscriptions.businessId} AND b.billing_exempt = true)`
+    ),
     isNotNull(subscriptions.gatewaySubscriptionId),
     or(isNull(subscriptions.gatewayCancelLastAttemptAt), lt(subscriptions.gatewayCancelLastAttemptAt, leaseLimit))
   )
@@ -397,22 +400,25 @@ export async function runBillingMaintenance(db: BillingDb, now = new Date(), gat
       .select()
       .from(subscriptions)
       .where(
-        or(
-          and(
-            eq(subscriptions.cancelAtPeriodEnd, true),
-            notInArray(subscriptions.status, ENDED),
-            lt(subscriptions.currentPeriodEnd, now)
+        and(
+          or(
+            and(
+              eq(subscriptions.cancelAtPeriodEnd, true),
+              notInArray(subscriptions.status, ENDED),
+              lt(subscriptions.currentPeriodEnd, now)
+            ),
+            // A primeira cobrança vencida chega como PAYMENT_OVERDUE (past_due) antes do fim da carência;
+            // sem esse caso o trial não pago nunca expirava e o Asaas seguia gerando cobranças.
+            // A carência conta da criação da cobrança no Asaas quando ela atrasou (falha temporária),
+            // e nunca corre enquanto a assinatura ainda não foi criada: o cliente não perde o acesso.
+            and(
+              inArray(subscriptions.status, ["trialing", "past_due"]),
+              or(isNull(subscriptions.gatewayActivationStatus), eq(subscriptions.gatewayActivationStatus, "done")),
+              sql`GREATEST(${subscriptions.trialEndsAt}, ${subscriptions.gatewayActivatedAt}) < ${graceLimit.toISOString()}::timestamptz`,
+              sql`NOT EXISTS (SELECT 1 FROM billing_transactions t WHERE t.subscription_id = ${subscriptions.id} AND t.status IN ('approved', 'refunded'))`
+            )
           ),
-          // A primeira cobrança vencida chega como PAYMENT_OVERDUE (past_due) antes do fim da carência;
-          // sem esse caso o trial não pago nunca expirava e o Asaas seguia gerando cobranças.
-          // A carência conta da criação da cobrança no Asaas quando ela atrasou (falha temporária),
-          // e nunca corre enquanto a assinatura ainda não foi criada: o cliente não perde o acesso.
-          and(
-            inArray(subscriptions.status, ["trialing", "past_due"]),
-            or(isNull(subscriptions.gatewayActivationStatus), eq(subscriptions.gatewayActivationStatus, "done")),
-            sql`GREATEST(${subscriptions.trialEndsAt}, ${subscriptions.gatewayActivatedAt}) < ${graceLimit.toISOString()}::timestamptz`,
-            sql`NOT EXISTS (SELECT 1 FROM billing_transactions t WHERE t.subscription_id = ${subscriptions.id} AND t.status IN ('approved', 'refunded'))`
-          )
+          sql`NOT EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${subscriptions.businessId} AND b.billing_exempt = true)`
         )
       )
       .for("update")

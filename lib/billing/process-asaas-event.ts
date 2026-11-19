@@ -5,7 +5,7 @@ import * as schema from "@/lib/db/schema"
 import type { SubscriptionRow, SubscriptionStatus, TransactionStatus } from "@/lib/db/schema"
 import { registerPromoPayment } from "@/lib/billing/launch-promo"
 
-const { billingTransactions, billingWebhookEvents, plans, subscriptionEvents, subscriptions } = schema
+const { billingTransactions, billingWebhookEvents, businesses, plans, subscriptionEvents, subscriptions } = schema
 
 export type BillingDb = PgDatabase<PgQueryResultHKT, typeof schema>
 type Tx = Parameters<Parameters<BillingDb["transaction"]>[0]>[0]
@@ -249,6 +249,13 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
     becameApproved = transition && nextStatus === "approved"
   }
 
+  const [business] = await tx
+    .select({ billingExempt: businesses.billingExempt })
+    .from(businesses)
+    .where(eq(businesses.id, sub.businessId))
+    .limit(1)
+  if (business?.billingExempt) return "processed" as const
+
   const details = { eventId: event.id, event: event.event, paymentId: payment.id, amountCents }
   // Trial expirado que foi pago depois (ex.: boleto compensado com atraso): reabre a assinatura,
   // desde que o estabelecimento não tenha contratado outra nesse meio-tempo.
@@ -340,7 +347,15 @@ async function handleSubscription(tx: Tx, event: AsaasEvent) {
   const payload = event.subscription
   if (!payload) return "ignored" as const
   const sub = await findSubscription(tx, payload.id, payload.externalReference)
-  if (!sub || sub.status === "canceled" || sub.status === "expired") return "ignored" as const
+  if (!sub) return "ignored" as const
+
+  const [business] = await tx
+    .select({ billingExempt: businesses.billingExempt })
+    .from(businesses)
+    .where(eq(businesses.id, sub.businessId))
+    .limit(1)
+  if (business?.billingExempt) return "processed" as const
+  if (sub.status === "canceled" || sub.status === "expired") return "ignored" as const
 
   const now = new Date()
   const details = { eventId: event.id, event: event.event }

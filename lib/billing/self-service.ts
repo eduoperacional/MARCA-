@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNull, lt, lte, or, sql } from "drizzle-orm"
 
 import * as schema from "@/lib/db/schema"
-import type { BillingInterval, PlanRow, PromoRedemptionRow, SubscriptionRow } from "@/lib/db/schema"
+import type { BillingInterval, PromoRedemptionRow, SubscriptionRow } from "@/lib/db/schema"
 import { businessTrialEnd } from "@/lib/billing/access"
 import {
   PROMO_HOLD_MS,
@@ -29,7 +29,7 @@ import {
 } from "@/lib/billing/subscriptions"
 import { isPlanAvailableTo } from "@/lib/billing/test-plan"
 
-const { billingTransactions, plans, subscriptionEvents, subscriptions } = schema
+const { billingTransactions, businesses, plans, subscriptionEvents, subscriptions } = schema
 
 export type BillingType = "PIX" | "BOLETO" | "CREDIT_CARD"
 
@@ -165,6 +165,9 @@ export async function startCheckout(
   }
 ) {
   const now = input.now ?? new Date()
+  const [business] = await db.select({ billingExempt: businesses.billingExempt }).from(businesses).where(eq(businesses.id, input.business.id)).limit(1)
+  if (business?.billingExempt) throw new BillingRuleError("Este estabelecimento está isento de cobrança.")
+
   const plan = await getActivePlan(db, input.planId)
   if (!plan) throw new BillingRuleError("Plano indisponível.")
 
@@ -261,6 +264,8 @@ export async function startCheckout(
 }
 
 export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub: SubscriptionRow, planId: string, actor: Actor) {
+  const [business] = await db.select({ billingExempt: businesses.billingExempt }).from(businesses).where(eq(businesses.id, sub.businessId)).limit(1)
+  if (business?.billingExempt) throw new BillingRuleError("Este estabelecimento está isento de cobrança.")
   if (!isContracted(sub)) throw new BillingRuleError("Contrate um plano antes de alterá-lo.")
   if (sub.status === "past_due" || sub.status === "suspended") {
     throw new BillingRuleError("Regularize a cobrança em aberto antes de mudar de plano.")
@@ -337,7 +342,8 @@ export async function processGatewayActivations(
     eq(subscriptions.gatewayActivationStatus, "pending"),
     eq(subscriptions.status, "trialing"),
     isNull(subscriptions.gatewaySubscriptionId),
-    lte(subscriptions.trialEndsAt, now)
+    lte(subscriptions.trialEndsAt, now),
+    sql`NOT EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${subscriptions.businessId} AND b.billing_exempt = true)`
   )
   const claimable = and(
     due,
@@ -385,6 +391,8 @@ export async function processGatewayActivations(
 }
 
 async function activateOne(db: BillingDb, gateway: CheckoutGateway, claimed: SubscriptionRow, now: Date, retryDelayMs: number) {
+  const [business] = await db.select({ billingExempt: businesses.billingExempt }).from(businesses).where(eq(businesses.id, claimed.businessId)).limit(1)
+  if (business?.billingExempt) return null
   if (!claimed.gatewayCustomerId) throw new Error("Assinatura sem cliente no Asaas.")
   const customer = claimed.gatewayCustomerId
   const [plan] = await db.select().from(plans).where(eq(plans.id, claimed.planId)).limit(1)

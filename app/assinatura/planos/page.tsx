@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: "Planos" }
 
 export default async function PlansPage() {
   const access = await requireAccess()
-  if (access.role !== "owner") redirect("/assinatura")
+  if (access.role !== "owner" || access.business.billingExempt) redirect("/assinatura")
 
   const [rows, sub, hadSub] = await Promise.all([
     listPublicPlans(db),

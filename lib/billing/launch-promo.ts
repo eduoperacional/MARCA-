@@ -362,7 +362,8 @@ export async function releaseAbandonedPromoReservations(db: BillingDb, now: Date
             lt(promoRedemptions.expiresAt, now),
             or(isNull(subscriptions.gatewayActivationStatus), eq(subscriptions.gatewayActivationStatus, "done"))
           )
-        )
+        ),
+        sql`NOT EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${promoRedemptions.businessId} AND b.billing_exempt = true)`
       )
     )
 
@@ -379,7 +380,11 @@ export async function releaseAbandonedPromoReservations(db: BillingDb, now: Date
         priceSyncStatus: !ended && sub.gatewaySubscriptionId ? "pending" : null,
         updatedAt: now,
       })
-      .where(and(eq(promoRedemptions.id, id), eq(promoRedemptions.status, "reserved")))
+      .where(and(
+        eq(promoRedemptions.id, id),
+        eq(promoRedemptions.status, "reserved"),
+        sql`NOT EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${promoRedemptions.businessId} AND b.billing_exempt = true)`
+      ))
       .returning({ id: promoRedemptions.id })
     if (!row) continue
     released++
@@ -405,7 +410,8 @@ export async function processPromoPriceSync(db: BillingDb, gateway: PriceGateway
   const leaseLimit = new Date(now.getTime() - PROMO_PRICE_SYNC_LEASE_MS)
   const claimable = and(
     eq(promoRedemptions.priceSyncStatus, "pending"),
-    or(isNull(promoRedemptions.priceSyncLastAttemptAt), lt(promoRedemptions.priceSyncLastAttemptAt, leaseLimit))
+    or(isNull(promoRedemptions.priceSyncLastAttemptAt), lt(promoRedemptions.priceSyncLastAttemptAt, leaseLimit)),
+    sql`NOT EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${promoRedemptions.businessId} AND b.billing_exempt = true)`
   )
   const candidates = await db.select({ id: promoRedemptions.id }).from(promoRedemptions).where(claimable).limit(PROMO_PRICE_SYNC_BATCH)
 
