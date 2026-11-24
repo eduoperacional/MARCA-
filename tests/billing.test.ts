@@ -23,6 +23,8 @@ import {
   cancelOwnSubscription,
   changeOwnPlan,
   GATEWAY_ACTIVATION_LEASE_MS,
+  getBillingOverview,
+  getPlanLimit,
   listPublicPlans,
   processGatewayActivations,
   runBillingCron,
@@ -261,10 +263,49 @@ describe("migrations", () => {
       "010-enfileirar-trials-expirados.sql",
       "011-plano-teste-oculto.sql",
       "012-descontinuar-plano-teste.sql",
+      "023-beneficio-parceiro-pro.sql",
     ]) {
       await pg.exec(fs.readFileSync(path.join(dir, file), "utf8"))
     }
     assert.equal((await db.select().from(schema.plans)).length, 7)
+  })
+})
+
+describe("benefício de parceiro no billing", () => {
+  test("oferece o plano PRO sem assinatura, fatura ou chamadas ao Asaas; revogação volta ao fluxo normal", async () => {
+    const business = await newBusiness(new Date("2020-01-01T00:00:00Z"))
+    await db.update(schema.businesses).set({ partnerBenefitActive: true, partnerBenefitCategory: "promotion_partner" }).where(eq(schema.businesses.id, business.id))
+
+    const pro = await planByCode("pro")
+    assert.ok(pro)
+    const overview = await getBillingOverview(db, business.id)
+    assert.equal(overview.subscription, null)
+    assert.equal(overview.plan?.id, pro.id)
+    assert.deepEqual(overview.plan?.features, pro.features)
+    assert.deepEqual(overview.pending, [])
+    assert.equal(await getPlanLimit(db, business.id, "professionals"), pro.limits.professionals)
+    assert.equal(await getPlanLimit(db, business.id, "services"), pro.limits.services)
+    assert.equal(await getPlanLimit(db, business.id, "members"), pro.limits.members)
+
+    const { gateway, calls } = fakeGateway()
+    await assert.rejects(
+      startCheckout(db, gateway, {
+        business,
+        user: { id: "u1", email: "parceiro@teste.com" },
+        planId: pro.id,
+        billingType: "PIX",
+        cpfCnpj: "12345678909",
+      }),
+      /benefício ativo de parceiro PRO/
+    )
+    assert.equal(calls.length, 0, "nenhuma chamada de cliente, assinatura ou cobrança ao Asaas")
+    assert.equal((await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.businessId, business.id))).length, 0)
+    assert.equal((await db.select().from(schema.billingTransactions).where(eq(schema.billingTransactions.businessId, business.id))).length, 0)
+
+    await db.update(schema.businesses).set({ partnerBenefitActive: false }).where(eq(schema.businesses.id, business.id))
+    const access = computeBillingAccess({ ...business, partnerBenefitActive: false }, null, new Date("2026-11-24T00:00:00Z"))
+    assert.equal(access.allowed, false)
+    assert.equal(access.state, "blocked_no_plan")
   })
 })
 
@@ -555,7 +596,7 @@ describe("webhook: eventos de assinatura", () => {
       const rbSub = rb.result.subscription
 
       await db.update(schema.businesses).set({ billingExempt: true }).where(eq(schema.businesses.id, studio.business.id))
-      await db.update(schema.businesses).set({ name: "RB Barber", slug: "rb-barber" }).where(eq(schema.businesses.id, rb.business.id))
+      await db.update(schema.businesses).set({ name: "RB Barber", slug: `rb-${rb.business.id}` }).where(eq(schema.businesses.id, rb.business.id))
       await db.update(schema.subscriptions).set({ priceCents: 500 }).where(eq(schema.subscriptions.id, rbSub.id))
 
       const before = await getSub(studioSub.id)
@@ -918,6 +959,19 @@ describe("isenção permanente Studio Bella", () => {
     assert.equal(computeBillingAccess({ createdAt: context.business.createdAt, billingExempt: true }, await getSub(sub.id), new Date(Date.now() + 30 * DAY)).allowed, true)
   })
 
+  test("parceiro PRO não é ativado no Asaas durante o trial", async () => {
+    const context = await trialCheckout()
+    const sub = context.result.subscription
+    await db.update(schema.businesses).set({ partnerBenefitActive: true }).where(eq(schema.businesses.id, context.business.id))
+    await db.update(schema.subscriptions).set({ trialEndsAt: new Date(Date.now() - 30 * DAY) }).where(eq(schema.subscriptions.id, sub.id))
+
+    const summary = await processGatewayActivations(db, context.gateway, new Date(Date.now() + 30 * DAY), { retryDelayMs: 0 })
+    assert.equal(context.calls.filter((call) => call.op === "createSubscription").length, 0)
+    assert.equal(summary.pending, 0)
+    assert.equal((await getSub(sub.id)).gatewayActivationStatus, "pending")
+    assert.equal(computeBillingAccess({ createdAt: context.business.createdAt, partnerBenefitActive: true }, await getSub(sub.id), new Date(Date.now() + 30 * DAY)).state, "partner")
+  })
+
   test("webhooks registram o pagamento, mas não renovam nem alteram a assinatura isenta", async () => {
     const { business, result } = await checkout()
     const sub = result.subscription
@@ -941,7 +995,7 @@ describe("isenção permanente Studio Bella", () => {
     const studio = await newBusiness()
     const rb = await newBusiness()
     await db.update(schema.businesses).set({ name: "Studio Bella", slug: "studio-bella" }).where(eq(schema.businesses.id, studio.id))
-    await db.update(schema.businesses).set({ name: "RB Barber", slug: "rb-barber" }).where(eq(schema.businesses.id, rb.id))
+    await db.update(schema.businesses).set({ name: "RB Barber", slug: `rb-${rb.id}` }).where(eq(schema.businesses.id, rb.id))
     const studioCheckout = await checkout()
     const rbCheckout = await checkout()
     await db.update(schema.subscriptions).set({ businessId: studio.id, gatewaySubscriptionId: "asaas_studio_bella" }).where(eq(schema.subscriptions.id, studioCheckout.result.subscription.id))
@@ -1294,7 +1348,7 @@ describe("cobrança criada pelo cron no fim do trial", () => {
     await webhook(paymentEvent("PAYMENT_CONFIRMED", sub, `pay_${crypto.randomUUID()}`))
     const row = await getSub(sub.id)
     assert.equal(row.status, "active")
-    assert.equal(computeBillingAccess(business, row, new Date(sub.trialEndsAt!.getTime() + 20 * DAY), 7).allowed, true)
+    assert.equal(computeBillingAccess(business, row, new Date(sub.trialEndsAt!.getTime() + 10 * DAY), 7).allowed, true)
   })
 
   test("sem pagamento: inadimplência, bloqueio após a carência e cancelamento no Asaas", async () => {

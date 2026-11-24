@@ -77,6 +77,8 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = {
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
   "business.suspend": "Suspendeu acesso",
   "business.reactivate": "Reativou acesso",
+  "business.partner_benefit_grant": "Concedeu benefício parceiro PRO",
+  "business.partner_benefit_revoke": "Revogou benefício parceiro PRO",
   "business.note": "Registrou observação",
   "subscription.change_plan": "Alterou plano",
   "subscription.courtesy": "Concedeu cortesia",

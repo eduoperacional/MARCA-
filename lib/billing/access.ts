@@ -22,6 +22,7 @@ export function isBillingEnforced() {
 
 export type BillingAccessState =
   | "exempt"
+  | "partner"
   | "courtesy"
   | "trial"
   | "active"
@@ -42,7 +43,7 @@ export type BillingAccess = {
   notice: string | null
 }
 
-type BusinessLike = { createdAt: Date; billingExempt?: boolean }
+type BusinessLike = { createdAt: Date; billingExempt?: boolean; partnerBenefitActive?: boolean }
 type SubLike = Pick<
   SubscriptionRow,
   "status" | "trialEndsAt" | "currentPeriodEnd" | "courtesyUntil" | "cancelAtPeriodEnd"
@@ -65,6 +66,9 @@ export function computeBillingAccess(
   now = new Date(),
   trialDays = TRIAL_DAYS
 ): BillingAccess {
+  if (business.partnerBenefitActive) {
+    return { state: "partner", allowed: true, until: null, notice: null }
+  }
   if (business.billingExempt) {
     return { state: "exempt", allowed: true, until: null, notice: null }
   }

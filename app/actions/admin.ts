@@ -1,9 +1,10 @@
 "use server"
 
-import { eq } from "drizzle-orm"
+import { and, eq, inArray, notInArray, or } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
 import { cleanText, isUuid } from "@/lib/actions/result"
+import { partnerBenefitGrantBlockReason } from "@/lib/billing/partner-benefit"
 import { authorizeAdmin, logAdminAction } from "@/lib/admin/auth"
 import { AsaasError, cancelSubscription, toAsaasCycle, updateSubscription } from "@/lib/billing/asaas"
 import { gatewayPriceCents } from "@/lib/billing/launch-promo"
@@ -67,6 +68,63 @@ export async function reactivateBusinessAction(_: AdminFormState, form: FormData
   await logAdminAction(admin, { action: "business.reactivate", targetType: "business", targetId: businessId, businessId, reason })
   refresh(businessId)
   return { ok: true, message: "Acesso reativado." }
+}
+
+export async function partnerBenefitAction(_: AdminFormState, form: FormData): Promise<AdminFormState> {
+  const admin = await authorizeAdmin("businesses.manage")
+  if (!admin) return DENIED
+  const businessId = await businessExists(form.get("businessId"))
+  const mode = form.get("mode")
+  const reason = cleanText(form.get("reason"), 500)
+  if (!businessId) return { ok: false, message: "Estabelecimento não encontrado." }
+  if (mode !== "grant" && mode !== "revoke") return { ok: false, message: "Ação inválida." }
+  if (!reason || reason.length < 5) return { ok: false, message: "Informe o motivo (mínimo 5 caracteres)." }
+
+  const [business] = await db.select().from(businesses).where(eq(businesses.id, businessId)).limit(1)
+  if (!business) return { ok: false, message: "Estabelecimento não encontrado." }
+  const now = new Date()
+
+  if (mode === "grant") {
+    const [openSubscription] = await db
+      .select({ id: subscriptions.id })
+      .from(subscriptions)
+      .where(
+        and(
+          eq(subscriptions.businessId, businessId),
+          or(
+            notInArray(subscriptions.status, ["canceled", "expired"]),
+            inArray(subscriptions.gatewayCancelStatus, ["pending", "failed"])
+          )
+        )
+      )
+      .limit(1)
+    const blockedReason = partnerBenefitGrantBlockReason(business, Boolean(openSubscription))
+    if (blockedReason) return { ok: false, message: blockedReason }
+
+    await db.update(businesses).set({
+      partnerBenefitActive: true,
+      partnerBenefitCategory: "promotion_partner",
+      partnerBenefitGrantedBy: admin.user.id,
+      partnerBenefitGrantedAt: now,
+      partnerBenefitRevokedBy: null,
+      partnerBenefitRevokedAt: null,
+    }).where(eq(businesses.id, businessId))
+    await logAdminAction(admin, { action: "business.partner_benefit_grant", targetType: "business", targetId: businessId, businessId, reason })
+    refresh(businessId)
+    revalidatePath("/assinatura")
+    return { ok: true, message: "Benefício PRO concedido sem criar assinatura ou cobrança. Assinaturas existentes são preservadas; encerre-as pelo fluxo normal antes de conceder o benefício." }
+  }
+
+  if (!business.partnerBenefitActive) return { ok: false, message: "Este estabelecimento não tem benefício de parceiro ativo." }
+  await db.update(businesses).set({
+    partnerBenefitActive: false,
+    partnerBenefitRevokedBy: admin.user.id,
+    partnerBenefitRevokedAt: now,
+  }).where(eq(businesses.id, businessId))
+  await logAdminAction(admin, { action: "business.partner_benefit_revoke", targetType: "business", targetId: businessId, businessId, reason })
+  refresh(businessId)
+  revalidatePath("/assinatura")
+  return { ok: true, message: "Benefício PRO revogado. O estabelecimento volta às regras de plano e cobrança normais." }
 }
 
 export async function addNoteAction(_: AdminFormState, form: FormData): Promise<AdminFormState> {
