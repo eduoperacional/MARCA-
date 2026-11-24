@@ -250,11 +250,11 @@ async function handlePayment(tx: Tx, event: AsaasEvent, payment: AsaasPayment) {
   }
 
   const [business] = await tx
-    .select({ billingExempt: businesses.billingExempt })
+    .select({ billingExempt: businesses.billingExempt, partnerBenefitActive: businesses.partnerBenefitActive })
     .from(businesses)
     .where(eq(businesses.id, sub.businessId))
     .limit(1)
-  if (business?.billingExempt) return "processed" as const
+  if (business?.billingExempt || business?.partnerBenefitActive) return "processed" as const
 
   const details = { eventId: event.id, event: event.event, paymentId: payment.id, amountCents }
   // Trial expirado que foi pago depois (ex.: boleto compensado com atraso): reabre a assinatura,
@@ -350,11 +350,11 @@ async function handleSubscription(tx: Tx, event: AsaasEvent) {
   if (!sub) return "ignored" as const
 
   const [business] = await tx
-    .select({ billingExempt: businesses.billingExempt })
+    .select({ billingExempt: businesses.billingExempt, partnerBenefitActive: businesses.partnerBenefitActive })
     .from(businesses)
     .where(eq(businesses.id, sub.businessId))
     .limit(1)
-  if (business?.billingExempt) return "processed" as const
+  if (business?.billingExempt || business?.partnerBenefitActive) return "processed" as const
   if (sub.status === "canceled" || sub.status === "expired") return "ignored" as const
 
   const now = new Date()

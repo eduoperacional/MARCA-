@@ -165,7 +165,12 @@ export async function startCheckout(
   }
 ) {
   const now = input.now ?? new Date()
-  const [business] = await db.select({ billingExempt: businesses.billingExempt }).from(businesses).where(eq(businesses.id, input.business.id)).limit(1)
+  const [business] = await db
+    .select({ billingExempt: businesses.billingExempt, partnerBenefitActive: businesses.partnerBenefitActive })
+    .from(businesses)
+    .where(eq(businesses.id, input.business.id))
+    .limit(1)
+  if (business?.partnerBenefitActive) throw new BillingRuleError("Este estabelecimento tem benefício ativo de parceiro PRO e não pode contratar um plano pago.")
   if (business?.billingExempt) throw new BillingRuleError("Este estabelecimento está isento de cobrança.")
 
   const plan = await getActivePlan(db, input.planId)
@@ -264,7 +269,12 @@ export async function startCheckout(
 }
 
 export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub: SubscriptionRow, planId: string, actor: Actor) {
-  const [business] = await db.select({ billingExempt: businesses.billingExempt }).from(businesses).where(eq(businesses.id, sub.businessId)).limit(1)
+  const [business] = await db
+    .select({ billingExempt: businesses.billingExempt, partnerBenefitActive: businesses.partnerBenefitActive })
+    .from(businesses)
+    .where(eq(businesses.id, sub.businessId))
+    .limit(1)
+  if (business?.partnerBenefitActive) throw new BillingRuleError("Este estabelecimento tem benefício ativo de parceiro PRO.")
   if (business?.billingExempt) throw new BillingRuleError("Este estabelecimento está isento de cobrança.")
   if (!isContracted(sub)) throw new BillingRuleError("Contrate um plano antes de alterá-lo.")
   if (sub.status === "past_due" || sub.status === "suspended") {
@@ -343,7 +353,7 @@ export async function processGatewayActivations(
     eq(subscriptions.status, "trialing"),
     isNull(subscriptions.gatewaySubscriptionId),
     lte(subscriptions.trialEndsAt, now),
-    sql`NOT EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${subscriptions.businessId} AND b.billing_exempt = true)`
+    sql`NOT EXISTS (SELECT 1 FROM businesses b WHERE b.id = ${subscriptions.businessId} AND (b.billing_exempt = true OR b.partner_benefit_active = true))`
   )
   const claimable = and(
     due,
@@ -391,8 +401,12 @@ export async function processGatewayActivations(
 }
 
 async function activateOne(db: BillingDb, gateway: CheckoutGateway, claimed: SubscriptionRow, now: Date, retryDelayMs: number) {
-  const [business] = await db.select({ billingExempt: businesses.billingExempt }).from(businesses).where(eq(businesses.id, claimed.businessId)).limit(1)
-  if (business?.billingExempt) return null
+  const [business] = await db
+    .select({ billingExempt: businesses.billingExempt, partnerBenefitActive: businesses.partnerBenefitActive })
+    .from(businesses)
+    .where(eq(businesses.id, claimed.businessId))
+    .limit(1)
+  if (business?.billingExempt || business?.partnerBenefitActive) return null
   if (!claimed.gatewayCustomerId) throw new Error("Assinatura sem cliente no Asaas.")
   const customer = claimed.gatewayCustomerId
   const [plan] = await db.select().from(plans).where(eq(plans.id, claimed.planId)).limit(1)
@@ -529,17 +543,28 @@ export async function cancelOwnSubscription(
 }
 
 export async function getBillingOverview(db: BillingDb, businessId: string) {
-  const sub = await getCurrentSubscription(db, businessId)
-  const [plan] = sub ? await db.select().from(plans).where(eq(plans.id, sub.planId)).limit(1) : []
+  const [business] = await db
+    .select({ partnerBenefitActive: businesses.partnerBenefitActive })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1)
+  const sub = business?.partnerBenefitActive ? null : await getCurrentSubscription(db, businessId)
+  const [plan] = business?.partnerBenefitActive
+    ? await db.select().from(plans).where(and(eq(plans.code, "pro"), eq(plans.isActive, true))).limit(1)
+    : sub
+      ? await db.select().from(plans).where(eq(plans.id, sub.planId)).limit(1)
+      : []
   const transactions = await db
     .select()
     .from(billingTransactions)
     .where(eq(billingTransactions.businessId, businessId))
     .orderBy(desc(billingTransactions.createdAt))
     .limit(36)
-  const pending = transactions
-    .filter((t) => t.status === "pending" && t.subscriptionId === sub?.id)
-    .sort((a, b) => (a.dueDate?.getTime() ?? 0) - (b.dueDate?.getTime() ?? 0))
+  const pending = business?.partnerBenefitActive
+    ? []
+    : transactions
+        .filter((t) => t.status === "pending" && t.subscriptionId === sub?.id)
+        .sort((a, b) => (a.dueDate?.getTime() ?? 0) - (b.dueDate?.getTime() ?? 0))
   return { subscription: sub, plan: plan ?? null, transactions, pending }
 }
 
@@ -554,6 +579,16 @@ export async function getOwnTransaction(db: BillingDb, businessId: string, trans
 
 /** Limites do plano vigente. Sem assinatura (trial do cadastro) não há limite. */
 export async function getPlanLimit(db: BillingDb, businessId: string, key: "professionals" | "services" | "members") {
+  const [business] = await db
+    .select({ partnerBenefitActive: businesses.partnerBenefitActive })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1)
+  if (business?.partnerBenefitActive) {
+    const [pro] = await db.select({ limits: plans.limits }).from(plans).where(and(eq(plans.code, "pro"), eq(plans.isActive, true))).limit(1)
+    const limit = pro?.limits?.[key]
+    return typeof limit === "number" && limit > 0 ? limit : null
+  }
   const sub = await getCurrentSubscription(db, businessId)
   const limit = sub?.limits?.[key]
   return typeof limit === "number" && limit > 0 ? limit : null

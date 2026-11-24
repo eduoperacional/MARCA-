@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import { notFound } from "next/navigation"
 
-import { addNoteAction, reactivateBusinessAction, suspendBusinessAction } from "@/app/actions/admin"
+import { addNoteAction, partnerBenefitAction, reactivateBusinessAction, suspendBusinessAction } from "@/app/actions/admin"
 import { AdminActionForm, AdminField, adminFieldClass } from "@/components/admin/admin-action-form"
 import { KpiCard, SectionCard } from "@/components/admin/kpi-card"
 import { PageHeader } from "@/components/admin/period-tabs"
@@ -93,6 +93,43 @@ export default async function BusinessDetailPage({ params }: PageProps<"/admin/e
           )}
         </SectionCard>
       </div>
+
+      {admin.can("businesses.manage") && (
+        <SectionCard
+          title="Benefício de parceiro PRO"
+          description="Parceiro de divulgação recebe os recursos e limites do plano PRO vigente, sem criar assinatura recorrente. Para preservar clientes pagantes, a concessão é recusada enquanto houver assinatura ativa ou cancelamento pendente."
+        >
+          {business.partnerBenefitActive ? (
+            <div className="flex flex-col gap-4">
+              <p role="status" className="text-sm text-foreground">
+                Ativo desde {formatDateTime(business.partnerBenefitGrantedAt)} · categoria: parceiro de divulgação
+              </p>
+              <AdminActionForm
+                action={partnerBenefitAction}
+                hidden={{ businessId: business.id, mode: "revoke" }}
+                submitLabel="Revogar benefício PRO"
+                destructive
+                confirm="Revogar o benefício PRO? O estabelecimento voltará às regras normais de assinatura e cobrança."
+              >
+                <AdminField label="Motivo da revogação">
+                  <textarea name="reason" required minLength={5} maxLength={500} rows={2} className={adminFieldClass} />
+                </AdminField>
+              </AdminActionForm>
+            </div>
+          ) : (
+            <AdminActionForm
+              action={partnerBenefitAction}
+              hidden={{ businessId: business.id, mode: "grant" }}
+              submitLabel="Conceder acesso PRO"
+              confirm="Conceder acesso PRO permanente enquanto durar a parceria? Nenhuma assinatura ou cobrança existente será alterada."
+            >
+              <AdminField label="Motivo da concessão">
+                <textarea name="reason" required minLength={5} maxLength={500} rows={2} className={adminFieldClass} />
+              </AdminField>
+            </AdminActionForm>
+          )}
+        </SectionCard>
+      )}
 
       <SectionCard title="Pagamentos" description="Últimas 20 cobranças recebidas do Asaas.">
         {transactions.length === 0 ? (

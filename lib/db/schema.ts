@@ -38,6 +38,12 @@ export const businesses = pgTable("businesses", {
   onboardingStep: integer("onboarding_step").notNull().default(1),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
   billingExempt: boolean("billing_exempt").notNull().default(false),
+  partnerBenefitActive: boolean("partner_benefit_active").notNull().default(false),
+  partnerBenefitCategory: text("partner_benefit_category"),
+  partnerBenefitGrantedBy: text("partner_benefit_granted_by"),
+  partnerBenefitGrantedAt: timestamp("partner_benefit_granted_at", { withTimezone: true }),
+  partnerBenefitRevokedBy: text("partner_benefit_revoked_by"),
+  partnerBenefitRevokedAt: timestamp("partner_benefit_revoked_at", { withTimezone: true }),
   createdAt: createdAt(),
 })
 
