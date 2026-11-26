@@ -1,9 +1,10 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { notFound, permanentRedirect } from "next/navigation"
-import { AtSign, CalendarOff, ExternalLink, Globe2, MapPin, Phone, Store } from "lucide-react"
+import { CalendarOff, Phone } from "lucide-react"
 
 import { BookingFlow } from "@/components/booking/booking-flow"
+import { PublicBusinessHeader } from "@/components/booking/public-business-header"
 import { isPublicBookingBlocked } from "@/lib/booking-guard"
 import { getBusinessBySlug } from "@/lib/business"
 import { db } from "@/lib/db"
@@ -11,7 +12,6 @@ import { getSiteUrl } from "@/lib/site-url-server"
 import { listProfessionals, listServices } from "@/lib/queries/catalog"
 import { todayLocal } from "@/lib/time"
 
-/* eslint-disable @next/next/no-img-element -- Public logos may use a runtime-defined Blob URL host. */
 
 export async function generateMetadata({ params }: PageProps<"/agendar/[slug]">): Promise<Metadata> {
   const { slug } = await params
@@ -68,59 +68,43 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
     .filter((s) => s.professionalIds.length > 0)
 
   return (
-    <div className="min-h-dvh bg-background">
-      <header className="border-b bg-card/40">
-        <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-6">
-          <div className="flex items-start gap-4">
-            <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted/60">
-              {business.logoUrl ? (
-                <img src={business.logoUrl} alt={`Logomarca de ${businessName}`} className="size-full object-contain" />
-              ) : (
-                <Store className="size-7 text-muted-foreground" aria-hidden="true" />
-              )}
-            </div>
-            <div className="flex min-w-0 flex-col gap-1">
-              <span className="text-xs font-medium tracking-wide text-brand-light uppercase">{business.segment ?? "Agendamento online"}</span>
-              <h1 className="font-heading text-2xl font-semibold text-balance">{businessName}</h1>
-              {business.description && <p className="text-sm leading-relaxed text-muted-foreground">{business.description}</p>}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
-            {business.address && (
-              <span className="flex items-center gap-1.5">
-                <MapPin className="size-3.5" aria-hidden="true" />
-                {business.address}
-              </span>
-            )}
-            {business.phone && (
-              <a href={`tel:${business.phone.replace(/[^+\d]/g, "")}`} className="flex items-center gap-1.5 hover:text-foreground">
-                <Phone className="size-3.5" aria-hidden="true" />
-                {business.phone}
-              </a>
-            )}
-            {business.instagramUrl && (
-              <a href={business.instagramUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 hover:text-foreground">
-                <AtSign className="size-3.5" aria-hidden="true" />
-                Instagram
-                <ExternalLink className="size-3" aria-hidden="true" />
-              </a>
-            )}
-            {business.websiteUrl && (
-              <a href={business.websiteUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 hover:text-foreground">
-                <Globe2 className="size-3.5" aria-hidden="true" />
-                Site
-                <ExternalLink className="size-3" aria-hidden="true" />
-              </a>
-            )}
-          </div>
-        </div>
-      </header>
-      <main className="mx-auto max-w-2xl px-4 py-6">
+    <div className="flex min-h-dvh flex-col bg-background">
+      <PublicBusinessHeader
+        business={{
+          name: businessName,
+          segment: business.segment,
+          description: business.description,
+          address: business.address,
+          city: business.city,
+          state: business.state,
+          phone: business.phone,
+          instagramUrl: business.instagramUrl,
+          websiteUrl: business.websiteUrl,
+          logoUrl: business.logoUrl,
+          coverUrl: business.coverUrl,
+        }}
+      />
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-12">
         {blocked || !business.onlineBookingEnabled || bookable.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-xl border p-10 text-center">
-            <CalendarOff className="size-8 text-muted-foreground" aria-hidden="true" />
-            <h2 className="font-heading text-lg font-semibold">Agendamento online indisponível</h2>
-            <p className="text-sm text-muted-foreground">Entre em contato diretamente com o estabelecimento para marcar seu horário.</p>
+          <div className="mx-auto flex max-w-md flex-col items-center gap-4 rounded-3xl border border-white/[0.07] bg-card p-10 text-center">
+            <span className="flex size-14 items-center justify-center rounded-full bg-white/[0.05]">
+              <CalendarOff className="size-7 text-muted-foreground" aria-hidden="true" />
+            </span>
+            <div className="flex flex-col gap-1.5">
+              <h2 className="font-heading text-xl font-semibold">Agendamento online indisponível</h2>
+              <p className="text-sm text-pretty text-muted-foreground">
+                Entre em contato diretamente com o estabelecimento para marcar seu horário.
+              </p>
+            </div>
+            {business.phone && (
+              <a
+                href={`tel:${business.phone.replace(/[^+\d]/g, "")}`}
+                className="inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <Phone className="size-4" aria-hidden="true" />
+                Ligar para {business.phone}
+              </a>
+            )}
           </div>
         ) : (
           <BookingFlow
@@ -148,8 +132,10 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
           />
         )}
       </main>
-      <footer className="flex flex-col items-center gap-2 pb-8 text-center text-xs text-muted-foreground">
-        <span>Agendamento por MarcAí</span>
+      <footer className="flex flex-col items-center gap-2 border-t border-white/[0.05] px-4 pt-6 pb-32 text-center text-xs text-muted-foreground lg:pb-8">
+        <span>
+          Agendamento por <span className="font-medium text-foreground/80">MarcAí</span>
+        </span>
         <nav aria-label="Documentos" className="flex gap-4">
           <Link href="/privacidade" className="hover:text-foreground hover:underline">Política de Privacidade</Link>
           <Link href="/termos" className="hover:text-foreground hover:underline">Termos de Uso</Link>
