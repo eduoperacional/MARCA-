@@ -1,23 +1,50 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { notFound, permanentRedirect } from "next/navigation"
-import { CalendarOff, MapPin, Phone } from "lucide-react"
+import { AtSign, CalendarOff, ExternalLink, Globe2, MapPin, Phone, Store } from "lucide-react"
 
 import { BookingFlow } from "@/components/booking/booking-flow"
 import { isPublicBookingBlocked } from "@/lib/booking-guard"
 import { getBusinessBySlug } from "@/lib/business"
 import { db } from "@/lib/db"
+import { getSiteUrl } from "@/lib/site-url-server"
 import { listProfessionals, listServices } from "@/lib/queries/catalog"
 import { todayLocal } from "@/lib/time"
+
+/* eslint-disable @next/next/no-img-element -- Public logos may use a runtime-defined Blob URL host. */
 
 export async function generateMetadata({ params }: PageProps<"/agendar/[slug]">): Promise<Metadata> {
   const { slug } = await params
   const business = await getBusinessBySlug(slug)
   if (!business) return { title: "Página não encontrada" }
+
+  const businessName = business.displayName || business.name
+  const profileDetails = [business.description?.trim(), business.address, business.phone].filter(Boolean).join(" · ")
+  const description = profileDetails.slice(0, 300) || `Agende seu horário online em ${businessName}.`
+  const siteUrl = await getSiteUrl()
+  const publicUrl = new URL(`/agendar/${business.slug}`, siteUrl).toString()
+  const image = business.logoUrl ? [{ url: business.logoUrl, alt: `Logomarca de ${businessName}` }] : undefined
+
   return {
-    title: { absolute: `Agendar horário · ${business.name}` },
-    description: `Agende seu horário online em ${business.name}.`,
-    alternates: { canonical: `/agendar/${business.slug}` },
+    metadataBase: new URL(siteUrl),
+    title: { absolute: `Agendar horário · ${businessName}` },
+    description,
+    alternates: { canonical: publicUrl },
+    openGraph: {
+      type: "website",
+      locale: "pt_BR",
+      siteName: businessName,
+      url: publicUrl,
+      title: businessName,
+      description,
+      ...(image ? { images: image } : {}),
+    },
+    twitter: {
+      card: image ? "summary_large_image" : "summary",
+      title: businessName,
+      description,
+      ...(image ? { images: image.map((item) => item.url) } : {}),
+    },
   }
 }
 
@@ -32,6 +59,7 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
     listProfessionals(business.id),
     isPublicBookingBlocked(db, business),
   ])
+  const businessName = business.displayName || business.name
   const activeProfessionals = professionals.filter((p) => p.active)
   const activeIds = new Set(activeProfessionals.map((p) => p.id))
   const bookable = services
@@ -42,10 +70,22 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
   return (
     <div className="min-h-dvh bg-background">
       <header className="border-b bg-card/40">
-        <div className="mx-auto flex max-w-2xl flex-col gap-1 px-4 py-6">
-          <span className="text-xs font-medium tracking-wide text-brand-light uppercase">{business.segment ?? "Agendamento online"}</span>
-          <h1 className="font-heading text-2xl font-semibold text-balance">{business.name}</h1>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+        <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-6">
+          <div className="flex items-start gap-4">
+            <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted/60">
+              {business.logoUrl ? (
+                <img src={business.logoUrl} alt={`Logomarca de ${businessName}`} className="size-full object-contain" />
+              ) : (
+                <Store className="size-7 text-muted-foreground" aria-hidden="true" />
+              )}
+            </div>
+            <div className="flex min-w-0 flex-col gap-1">
+              <span className="text-xs font-medium tracking-wide text-brand-light uppercase">{business.segment ?? "Agendamento online"}</span>
+              <h1 className="font-heading text-2xl font-semibold text-balance">{businessName}</h1>
+              {business.description && <p className="text-sm leading-relaxed text-muted-foreground">{business.description}</p>}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
             {business.address && (
               <span className="flex items-center gap-1.5">
                 <MapPin className="size-3.5" aria-hidden="true" />
@@ -53,10 +93,24 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
               </span>
             )}
             {business.phone && (
-              <span className="flex items-center gap-1.5">
+              <a href={`tel:${business.phone.replace(/[^+\d]/g, "")}`} className="flex items-center gap-1.5 hover:text-foreground">
                 <Phone className="size-3.5" aria-hidden="true" />
                 {business.phone}
-              </span>
+              </a>
+            )}
+            {business.instagramUrl && (
+              <a href={business.instagramUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 hover:text-foreground">
+                <AtSign className="size-3.5" aria-hidden="true" />
+                Instagram
+                <ExternalLink className="size-3" aria-hidden="true" />
+              </a>
+            )}
+            {business.websiteUrl && (
+              <a href={business.websiteUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 hover:text-foreground">
+                <Globe2 className="size-3.5" aria-hidden="true" />
+                Site
+                <ExternalLink className="size-3" aria-hidden="true" />
+              </a>
             )}
           </div>
         </div>
@@ -71,7 +125,7 @@ export default async function PublicBookingPage({ params }: PageProps<"/agendar/
         ) : (
           <BookingFlow
             slug={business.slug}
-            businessName={business.name}
+            businessName={businessName}
             today={todayLocal()}
             openWeekdays={business.openingHours.filter((d) => d.active).map((d) => d.weekday)}
             services={bookable.map((s) => ({

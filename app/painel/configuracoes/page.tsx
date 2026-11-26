@@ -42,10 +42,14 @@ export default async function SettingsPage({ searchParams }: PageProps<"/painel/
             />
           </div>
         }
+        logoUrl={business.logoUrl}
         initial={{
-          name: business.name,
+          displayName: business.displayName ?? business.name,
+          description: business.description ?? "",
           phone: business.phone ?? "",
           address: business.address ?? "",
+          instagram: business.instagramUrl ?? "",
+          website: business.websiteUrl ?? "",
           openingHours: business.openingHours,
           slotIntervalMin: business.slotIntervalMin,
           minAdvanceMin: business.minAdvanceMin,

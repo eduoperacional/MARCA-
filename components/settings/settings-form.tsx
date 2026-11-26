@@ -6,11 +6,12 @@ import { Loader2, Save } from "lucide-react"
 
 import { updateBusinessSettings } from "@/app/actions/operations"
 import { ScheduleEditor } from "@/components/shared/schedule-editor"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { BusinessLogoEditor } from "@/components/settings/business-logo-editor"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -28,9 +29,12 @@ const ADVANCE = [
 ]
 
 interface SettingsValues {
-  name: string
+  displayName: string
+  description: string
   phone: string
   address: string
+  instagram: string
+  website: string
   openingHours: DaySchedule[]
   slotIntervalMin: number
   minAdvanceMin: number
@@ -39,10 +43,12 @@ interface SettingsValues {
 
 export function SettingsForm({
   initial,
+  logoUrl,
   notifications,
   defaultTab = "estabelecimento",
 }: {
   initial: SettingsValues
+  logoUrl: string | null
   notifications: React.ReactNode
   defaultTab?: string
 }) {
@@ -75,7 +81,7 @@ export function SettingsForm({
 
       <Tabs defaultValue={defaultTab} className="gap-6">
         <TabsList className="h-auto w-full flex-wrap justify-start sm:w-fit">
-          <TabsTrigger value="estabelecimento">Estabelecimento</TabsTrigger>
+          <TabsTrigger value="estabelecimento">Perfil do estabelecimento</TabsTrigger>
           <TabsTrigger value="funcionamento">Funcionamento</TabsTrigger>
           <TabsTrigger value="online">Agendamento online</TabsTrigger>
           <TabsTrigger value="notificacoes">Notificações</TabsTrigger>
@@ -84,22 +90,82 @@ export function SettingsForm({
         <TabsContent value="estabelecimento" keepMounted className="max-w-2xl data-[hidden]:hidden">
           <Card>
             <CardHeader>
-              <CardTitle>Estabelecimento</CardTitle>
-              <CardDescription>Aparece na página pública e nas comunicações com seus clientes.</CardDescription>
+              <CardTitle>Perfil público</CardTitle>
+              <CardDescription>Essas informações aparecem na página de agendamento e na prévia dos links compartilhados.</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-col gap-6">
+              <BusinessLogoEditor key={logoUrl ?? "sem-logomarca"} initialLogoUrl={logoUrl} businessName={values.displayName} />
               <FieldGroup>
                 <Field>
-                  <FieldLabel htmlFor="business-name">Nome</FieldLabel>
-                  <Input id="business-name" value={values.name} onChange={(e) => set("name", e.target.value)} required />
+                  <FieldLabel htmlFor="business-display-name">Nome comercial</FieldLabel>
+                  <Input
+                    id="business-display-name"
+                    value={values.displayName}
+                    onChange={(e) => set("displayName", e.target.value)}
+                    maxLength={80}
+                    autoComplete="organization"
+                    required
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="business-description">Descrição</FieldLabel>
+                  <Textarea
+                    id="business-description"
+                    value={values.description}
+                    onChange={(e) => set("description", e.target.value)}
+                    maxLength={500}
+                    rows={3}
+                    placeholder="Conte brevemente o que torna seu estabelecimento especial."
+                  />
+                  <FieldDescription>Até 500 caracteres. Será exibida no perfil público e na prévia de compartilhamento.</FieldDescription>
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="business-phone">Telefone / WhatsApp</FieldLabel>
-                  <Input id="business-phone" type="tel" value={values.phone} onChange={(e) => set("phone", e.target.value)} />
+                  <Input
+                    id="business-phone"
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    maxLength={30}
+                    value={values.phone}
+                    onChange={(e) => set("phone", e.target.value)}
+                  />
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="business-address">Endereço</FieldLabel>
-                  <Input id="business-address" value={values.address} onChange={(e) => set("address", e.target.value)} />
+                  <Input
+                    id="business-address"
+                    value={values.address}
+                    onChange={(e) => set("address", e.target.value)}
+                    maxLength={200}
+                    autoComplete="street-address"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="business-instagram">Instagram</FieldLabel>
+                  <Input
+                    id="business-instagram"
+                    value={values.instagram}
+                    onChange={(e) => set("instagram", e.target.value)}
+                    maxLength={500}
+                    autoCapitalize="none"
+                    autoComplete="url"
+                    placeholder="@seuusuario ou instagram.com/seuusuario"
+                  />
+                  <FieldDescription>Informe o @usuário ou o link direto do perfil.</FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="business-website">Site</FieldLabel>
+                  <Input
+                    id="business-website"
+                    inputMode="url"
+                    value={values.website}
+                    onChange={(e) => set("website", e.target.value)}
+                    maxLength={500}
+                    autoCapitalize="none"
+                    autoComplete="url"
+                    placeholder="www.seusite.com.br"
+                  />
                 </Field>
               </FieldGroup>
             </CardContent>

@@ -29,6 +29,8 @@ export const businesses = pgTable("businesses", {
   minAdvanceMin: integer("min_advance_min").notNull().default(60),
   displayName: text("display_name"),
   description: text("description"),
+  instagramUrl: text("instagram_url"),
+  websiteUrl: text("website_url"),
   city: text("city"),
   state: text("state"),
   logoUrl: text("logo_url"),

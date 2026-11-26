@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { and, eq, isNull } from "drizzle-orm"
 
 import { cleanText, fail, isTime, isUuid, toCents } from "@/lib/actions/result"
+import { normalizeInstagramUrl, normalizeWebsiteUrl } from "@/lib/business-profile"
 import { authorize, NO_PERMISSION } from "@/lib/business"
 import { db } from "@/lib/db"
 import { businesses, expenses, notifications } from "@/lib/db/schema"
@@ -88,9 +89,12 @@ export async function deleteExpense(id: string) {
 /* ------------------------------- Configurações ------------------------------- */
 
 export async function updateBusinessSettings(input: {
-  name: string
-  phone?: string | null
-  address?: string | null
+  displayName: string
+  description: string
+  phone: string
+  address: string
+  instagram: string
+  website: string
   openingHours: DaySchedule[]
   slotIntervalMin: number
   minAdvanceMin: number
@@ -99,8 +103,12 @@ export async function updateBusinessSettings(input: {
   const access = await authorize("settings.manage")
   if (!access) return fail(NO_PERMISSION)
   const business = access.business
-  const name = cleanText(input.name, 120)
-  if (!name) return fail("Informe o nome do estabelecimento.")
+  const displayName = cleanText(input.displayName, 80)
+  if (!displayName) return fail("Informe o nome comercial do estabelecimento.")
+  const instagram = normalizeInstagramUrl(input.instagram)
+  if (instagram.error) return fail(instagram.error)
+  const website = normalizeWebsiteUrl(input.website)
+  if (website.error) return fail(website.error)
   if (!Array.isArray(input.openingHours) || input.openingHours.length !== 7) return fail("Horários inválidos.")
   for (const day of input.openingHours) {
     if (!day.active) continue
@@ -121,9 +129,12 @@ export async function updateBusinessSettings(input: {
   await db
     .update(businesses)
     .set({
-      name,
+      displayName,
+      description: cleanText(input.description, 500),
       phone: cleanText(input.phone, 30),
       address: cleanText(input.address, 200),
+      instagramUrl: instagram.value,
+      websiteUrl: website.value,
       openingHours: [...input.openingHours]
         .sort((a, b) => a.weekday - b.weekday)
         .map((d) => ({ ...d, breakStart: d.breakStart || null, breakEnd: d.breakEnd || null })),
