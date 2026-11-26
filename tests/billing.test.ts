@@ -272,31 +272,38 @@ describe("migrations", () => {
 })
 
 describe("benefício de parceiro no billing", () => {
-  test("oferece o plano PRO sem assinatura, fatura ou chamadas ao Asaas; revogação volta ao fluxo normal", async () => {
+  test("oferece o plano ELITE sem assinatura, fatura ou chamadas ao Asaas; revogação volta ao fluxo normal", async () => {
     const business = await newBusiness(new Date("2020-01-01T00:00:00Z"))
     await db.update(schema.businesses).set({ partnerBenefitActive: true, partnerBenefitCategory: "promotion_partner" }).where(eq(schema.businesses.id, business.id))
 
+    const elite = await planByCode("elite")
     const pro = await planByCode("pro")
+    assert.ok(elite)
     assert.ok(pro)
     const overview = await getBillingOverview(db, business.id)
     assert.equal(overview.subscription, null)
-    assert.equal(overview.plan?.id, pro.id)
-    assert.deepEqual(overview.plan?.features, pro.features)
+    assert.equal(overview.plan?.id, elite.id)
+    assert.notEqual(overview.plan?.id, pro.id)
+    assert.deepEqual(overview.plan?.features, elite.features)
     assert.deepEqual(overview.pending, [])
-    assert.equal(await getPlanLimit(db, business.id, "professionals"), pro.limits.professionals)
-    assert.equal(await getPlanLimit(db, business.id, "services"), pro.limits.services)
-    assert.equal(await getPlanLimit(db, business.id, "members"), pro.limits.members)
+    const eliteLimit = (key: "professionals" | "services" | "members") => {
+      const value = elite.limits?.[key]
+      return typeof value === "number" && value > 0 ? value : null
+    }
+    assert.equal(await getPlanLimit(db, business.id, "professionals"), eliteLimit("professionals"))
+    assert.equal(await getPlanLimit(db, business.id, "services"), eliteLimit("services"))
+    assert.equal(await getPlanLimit(db, business.id, "members"), eliteLimit("members"))
 
     const { gateway, calls } = fakeGateway()
     await assert.rejects(
       startCheckout(db, gateway, {
         business,
         user: { id: "u1", email: "parceiro@teste.com" },
-        planId: pro.id,
+        planId: elite.id,
         billingType: "PIX",
         cpfCnpj: "12345678909",
       }),
-      /benefício ativo de parceiro PRO/
+      /benefício ativo de parceiro ELITE/
     )
     assert.equal(calls.length, 0, "nenhuma chamada de cliente, assinatura ou cobrança ao Asaas")
     assert.equal((await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.businessId, business.id))).length, 0)

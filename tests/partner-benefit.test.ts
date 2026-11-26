@@ -2,9 +2,18 @@ import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 
 import { computeBillingAccess } from "@/lib/billing/access"
-import { partnerBenefitGrantBlockReason } from "@/lib/billing/partner-benefit"
+import {
+  PARTNER_BENEFIT_PLAN_CODE,
+  PARTNER_BENEFIT_PLAN_LABEL,
+  partnerBenefitGrantBlockReason,
+} from "@/lib/billing/partner-benefit"
 
-describe("benefício de parceiro PRO", () => {
+describe("benefício de parceiro ELITE", () => {
+  test("concede os recursos e limites do plano ELITE", () => {
+    assert.equal(PARTNER_BENEFIT_PLAN_CODE, "elite")
+    assert.equal(PARTNER_BENEFIT_PLAN_LABEL, "ELITE")
+  })
+
   test("permite concessão somente a estabelecimento elegível e sem assinatura aberta", () => {
     assert.equal(partnerBenefitGrantBlockReason({ billingExempt: false, partnerBenefitActive: false }, false), null)
     assert.match(

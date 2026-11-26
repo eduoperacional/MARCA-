@@ -40,7 +40,7 @@ export default async function BillingPage() {
 
       {isPartnerBenefit && (
         <div role="status" className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm leading-relaxed text-foreground">
-          Seu estabelecimento é parceiro de divulgação e tem acesso ao plano PRO enquanto o benefício estiver ativo. Não há assinatura nem novas cobranças recorrentes. Cobranças já emitidas antes da concessão não são canceladas retroativamente.
+          Seu estabelecimento é parceiro de divulgação e tem acesso gratuito ao plano ELITE enquanto o benefício estiver ativo. Não há assinatura nem novas cobranças recorrentes. Cobranças já emitidas antes da concessão não são canceladas retroativamente.
         </div>
       )}
       {isBillingExempt && (
@@ -65,17 +65,17 @@ export default async function BillingPage() {
               Plano atual
             </h2>
             <p className="text-2xl font-semibold text-foreground">
-              {isPartnerBenefit ? "PRO · Parceiro de divulgação" : plan ? plan.name : isBillingExempt ? "Isento de cobrança" : billing.state === "trial" ? "Período de teste" : "Nenhum plano"}
+              {isPartnerBenefit ? "ELITE · Parceiro de divulgação" : plan ? plan.name : isBillingExempt ? "Isento de cobrança" : billing.state === "trial" ? "Período de teste" : "Nenhum plano"}
             </p>
             {isPartnerBenefit ? (
-              <p className="text-sm text-muted-foreground">Recursos e limites do plano PRO vigente, sem assinatura ou cobrança recorrente.</p>
+              <p className="text-sm text-muted-foreground">Recursos e limites do plano ELITE vigente, gratuitamente, sem assinatura ou cobrança recorrente.</p>
             ) : plan && sub ? (
               <p className="text-sm text-muted-foreground">
                 {formatCents(sub.priceCents)} · {INTERVAL_LABEL[sub.billingInterval]}
               </p>
             ) : null}
           </div>
-          {isPartnerBenefit ? <ToneBadge tone="brand">Parceiro PRO</ToneBadge> : isBillingExempt ? <ToneBadge tone="brand">Isento de cobrança</ToneBadge> : status && <ToneBadge tone={status.tone}>{status.label}</ToneBadge>}
+          {isPartnerBenefit ? <ToneBadge tone="brand">Parceiro ELITE</ToneBadge> : isBillingExempt ? <ToneBadge tone="brand">Isento de cobrança</ToneBadge> : status && <ToneBadge tone={status.tone}>{status.label}</ToneBadge>}
           {!sub && billing.state === "trial" && <ToneBadge tone="brand">Teste grátis</ToneBadge>}
         </div>
 
