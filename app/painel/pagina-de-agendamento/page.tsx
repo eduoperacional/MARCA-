@@ -38,7 +38,7 @@ export default async function BookingPageAdminPage() {
       slug={business.slug}
       siteUrl={siteUrl}
       canEdit={access?.role === "owner"}
-      businessName={business.name}
+      businessName={business.displayName || business.name}
       settings={{
         onlineBookingEnabled: business.onlineBookingEnabled,
         minAdvanceMin: business.minAdvanceMin,
