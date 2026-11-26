@@ -138,6 +138,7 @@ export function templateParams(snapshot: AppointmentSnapshot, formatWhen: (insta
 }
 
 /** Atraso antes da próxima tentativa. Fixo porque o cron só roda uma vez por dia. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- mesma assinatura da fila de push; o atraso é fixo
 export function retryDelayMs(_attemptsMade?: number) {
   return RETRY_DELAY_HOURS * 60 * 60_000
 }
