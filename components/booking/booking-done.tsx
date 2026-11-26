@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button"
 import { formatCurrency } from "@/lib/format"
 import { dateFromLocal } from "@/lib/time"
 
+function capitalizeFirst(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
 export function BookingDone({
   businessName,
   service,
@@ -44,7 +48,7 @@ export function BookingDone({
             <span className="font-heading text-xl leading-none font-semibold tabular-nums">{format(dateFromLocal(date), "dd")}</span>
           </div>
           <div className="flex min-w-0 flex-col">
-            <span className="font-medium capitalize">{format(dateFromLocal(date), "EEEE", { locale: ptBR })} às {time}</span>
+            <span className="font-medium">{capitalizeFirst(format(dateFromLocal(date), "EEEE", { locale: ptBR }))} às {time}</span>
             <span className="text-sm text-muted-foreground">{formatDuration(service.durationMin)}</span>
           </div>
         </div>
@@ -54,13 +58,15 @@ export function BookingDone({
           <dt className="text-muted-foreground">Profissional</dt>
           <dd className="text-right font-medium">{professionalName ?? "A definir"}</dd>
           <dt className="text-muted-foreground">Data</dt>
-          <dd className="text-right font-medium capitalize">{format(dateFromLocal(date), "EEEE, dd 'de' MMMM", { locale: ptBR })}</dd>
+          <dd className="text-right font-medium">
+            {capitalizeFirst(format(dateFromLocal(date), "EEEE, dd 'de' MMMM", { locale: ptBR }))}
+          </dd>
           <dt className="text-muted-foreground">Horário</dt>
           <dd className="text-right font-medium tabular-nums">{time}</dd>
-          <dt className="border-t border-white/[0.07] pt-2.5 text-muted-foreground">Valor</dt>
-          <dd className="border-t border-white/[0.07] pt-2.5 text-right font-heading font-semibold tabular-nums">
-            {formatCurrency(service.price, true)}
-          </dd>
+        </dl>
+        <dl className="mx-4 flex items-baseline justify-between gap-4 border-t border-white/[0.07] py-3 text-sm">
+          <dt className="text-muted-foreground">Valor</dt>
+          <dd className="text-right font-heading font-semibold tabular-nums">{formatCurrency(service.price, true)}</dd>
         </dl>
       </div>
       <Button variant="outline" size="lg" className="rounded-xl" onClick={onRestart}>

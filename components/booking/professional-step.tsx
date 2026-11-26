@@ -87,8 +87,8 @@ function ProfessionalOption({
     >
       {avatar}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex items-center gap-2">
-          <span className="truncate font-medium">{title}</span>
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="min-w-0 truncate font-medium">{title}</span>
           {badge && (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-brand-light">
               <Sparkles className="size-3" aria-hidden="true" />
