@@ -78,6 +78,15 @@ interface ClientState {
   device: DeviceStatus
 }
 
+async function loadClientState(): Promise<ClientState> {
+  const support = getPushSupport()
+  const permission = getPermission()
+  if (support !== "supported" || permission !== "granted") {
+    return { support, permission, device: "not_subscribed" }
+  }
+  return { support, permission, device: await getDeviceStatus() }
+}
+
 export function PushNotificationsCard({ overview, canManageBusiness }: { overview: PushOverview; canManageBusiness: boolean }) {
   const router = useRouter()
   const [prefs, setPrefs] = useState(overview.preferences)
@@ -100,8 +109,14 @@ export function PushNotificationsCard({ overview, canManageBusiness }: { overvie
   }, [])
 
   useEffect(() => {
-    void refreshClient()
-  }, [refreshClient])
+    let active = true
+    loadClientState().then((state) => {
+      if (active) setClient(state)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   async function activateDevice() {
     if (!overview.publicKey) return
