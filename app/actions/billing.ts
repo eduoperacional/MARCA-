@@ -43,7 +43,7 @@ function failure(error: unknown): BillingFormState {
 export async function checkoutAction(_: BillingFormState, form: FormData): Promise<BillingFormState> {
   const access = await authorizeOwner()
   if (!access) return { ok: false, message: "Somente o proprietário pode contratar um plano." }
-  if (access.business.partnerBenefitActive) return { ok: false, message: "Este estabelecimento tem acesso PRO ativo por parceria e não precisa contratar um plano." }
+  if (access.business.partnerBenefitActive) return { ok: false, message: "Este estabelecimento tem acesso ELITE ativo por parceria e não precisa contratar um plano." }
   if (!asaas.isAsaasConfigured()) return { ok: false, message: "Pagamentos ainda não estão configurados. Fale com o suporte." }
 
   const planId = form.get("planId")

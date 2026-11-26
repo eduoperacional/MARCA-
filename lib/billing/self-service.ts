@@ -12,6 +12,7 @@ import {
   releaseAbandonedPromoReservations,
   reservePromoSlot,
 } from "@/lib/billing/launch-promo"
+import { PARTNER_BENEFIT_PLAN_CODE, PARTNER_BENEFIT_PLAN_LABEL } from "@/lib/billing/partner-benefit"
 import { ASAAS, parseAsaasDate, reprocessFailedEvents, type BillingDb } from "@/lib/billing/process-asaas-event"
 import {
   attachGatewaySubscription,
@@ -170,7 +171,7 @@ export async function startCheckout(
     .from(businesses)
     .where(eq(businesses.id, input.business.id))
     .limit(1)
-  if (business?.partnerBenefitActive) throw new BillingRuleError("Este estabelecimento tem benefício ativo de parceiro PRO e não pode contratar um plano pago.")
+  if (business?.partnerBenefitActive) throw new BillingRuleError(`Este estabelecimento tem benefício ativo de parceiro ${PARTNER_BENEFIT_PLAN_LABEL} e não pode contratar um plano pago.`)
   if (business?.billingExempt) throw new BillingRuleError("Este estabelecimento está isento de cobrança.")
 
   const plan = await getActivePlan(db, input.planId)
@@ -274,7 +275,7 @@ export async function changeOwnPlan(db: BillingDb, gateway: CheckoutGateway, sub
     .from(businesses)
     .where(eq(businesses.id, sub.businessId))
     .limit(1)
-  if (business?.partnerBenefitActive) throw new BillingRuleError("Este estabelecimento tem benefício ativo de parceiro PRO.")
+  if (business?.partnerBenefitActive) throw new BillingRuleError(`Este estabelecimento tem benefício ativo de parceiro ${PARTNER_BENEFIT_PLAN_LABEL}.`)
   if (business?.billingExempt) throw new BillingRuleError("Este estabelecimento está isento de cobrança.")
   if (!isContracted(sub)) throw new BillingRuleError("Contrate um plano antes de alterá-lo.")
   if (sub.status === "past_due" || sub.status === "suspended") {
@@ -550,7 +551,7 @@ export async function getBillingOverview(db: BillingDb, businessId: string) {
     .limit(1)
   const sub = business?.partnerBenefitActive ? null : await getCurrentSubscription(db, businessId)
   const [plan] = business?.partnerBenefitActive
-    ? await db.select().from(plans).where(and(eq(plans.code, "pro"), eq(plans.isActive, true))).limit(1)
+    ? await db.select().from(plans).where(and(eq(plans.code, PARTNER_BENEFIT_PLAN_CODE), eq(plans.isActive, true))).limit(1)
     : sub
       ? await db.select().from(plans).where(eq(plans.id, sub.planId)).limit(1)
       : []
@@ -585,8 +586,12 @@ export async function getPlanLimit(db: BillingDb, businessId: string, key: "prof
     .where(eq(businesses.id, businessId))
     .limit(1)
   if (business?.partnerBenefitActive) {
-    const [pro] = await db.select({ limits: plans.limits }).from(plans).where(and(eq(plans.code, "pro"), eq(plans.isActive, true))).limit(1)
-    const limit = pro?.limits?.[key]
+    const [partnerPlan] = await db
+      .select({ limits: plans.limits })
+      .from(plans)
+      .where(and(eq(plans.code, PARTNER_BENEFIT_PLAN_CODE), eq(plans.isActive, true)))
+      .limit(1)
+    const limit = partnerPlan?.limits?.[key]
     return typeof limit === "number" && limit > 0 ? limit : null
   }
   const sub = await getCurrentSubscription(db, businessId)

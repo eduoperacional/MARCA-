@@ -112,7 +112,7 @@ export async function partnerBenefitAction(_: AdminFormState, form: FormData): P
     await logAdminAction(admin, { action: "business.partner_benefit_grant", targetType: "business", targetId: businessId, businessId, reason })
     refresh(businessId)
     revalidatePath("/assinatura")
-    return { ok: true, message: "Benefício PRO concedido sem criar assinatura ou cobrança. Assinaturas existentes são preservadas; encerre-as pelo fluxo normal antes de conceder o benefício." }
+    return { ok: true, message: "Benefício ELITE concedido sem criar assinatura ou cobrança. Assinaturas existentes são preservadas; encerre-as pelo fluxo normal antes de conceder o benefício." }
   }
 
   if (!business.partnerBenefitActive) return { ok: false, message: "Este estabelecimento não tem benefício de parceiro ativo." }
@@ -124,7 +124,7 @@ export async function partnerBenefitAction(_: AdminFormState, form: FormData): P
   await logAdminAction(admin, { action: "business.partner_benefit_revoke", targetType: "business", targetId: businessId, businessId, reason })
   refresh(businessId)
   revalidatePath("/assinatura")
-  return { ok: true, message: "Benefício PRO revogado. O estabelecimento volta às regras de plano e cobrança normais." }
+  return { ok: true, message: "Benefício ELITE revogado. O estabelecimento volta às regras de plano e cobrança normais." }
 }
 
 export async function addNoteAction(_: AdminFormState, form: FormData): Promise<AdminFormState> {

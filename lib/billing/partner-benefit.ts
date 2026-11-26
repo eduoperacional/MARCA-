@@ -1,3 +1,7 @@
+/** Plano cujos recursos e limites o parceiro de divulgação recebe, sem assinatura nem cobrança. */
+export const PARTNER_BENEFIT_PLAN_CODE = "elite"
+export const PARTNER_BENEFIT_PLAN_LABEL = "ELITE"
+
 type PartnerBenefitBusiness = {
   billingExempt: boolean
   partnerBenefitActive: boolean
@@ -5,7 +9,7 @@ type PartnerBenefitBusiness = {
 
 export function partnerBenefitGrantBlockReason(business: PartnerBenefitBusiness, hasOpenSubscription: boolean) {
   if (business.partnerBenefitActive) return "O benefício de parceiro já está ativo."
-  if (business.billingExempt) return "Este estabelecimento já tem isenção de cobrança. Não é necessário conceder benefício de parceiro PRO."
+  if (business.billingExempt) return `Este estabelecimento já tem isenção de cobrança. Não é necessário conceder benefício de parceiro ${PARTNER_BENEFIT_PLAN_LABEL}.`
   if (hasOpenSubscription) {
     return "Há uma assinatura ativa ou cancelamento pendente. Preserve a cobrança existente e encerre a assinatura pelo fluxo normal antes de conceder o benefício."
   }

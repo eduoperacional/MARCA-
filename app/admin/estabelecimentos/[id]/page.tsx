@@ -96,8 +96,8 @@ export default async function BusinessDetailPage({ params }: PageProps<"/admin/e
 
       {admin.can("businesses.manage") && (
         <SectionCard
-          title="Benefício de parceiro PRO"
-          description="Parceiro de divulgação recebe os recursos e limites do plano PRO vigente, sem criar assinatura recorrente. Para preservar clientes pagantes, a concessão é recusada enquanto houver assinatura ativa ou cancelamento pendente."
+          title="Benefício de parceiro ELITE"
+          description="Parceiro de divulgação recebe gratuitamente os recursos e limites do plano ELITE vigente, sem criar assinatura recorrente nem cobrança no Asaas. Para preservar clientes pagantes, a concessão é recusada enquanto houver assinatura ativa ou cancelamento pendente."
         >
           {business.partnerBenefitActive ? (
             <div className="flex flex-col gap-4">
@@ -107,9 +107,9 @@ export default async function BusinessDetailPage({ params }: PageProps<"/admin/e
               <AdminActionForm
                 action={partnerBenefitAction}
                 hidden={{ businessId: business.id, mode: "revoke" }}
-                submitLabel="Revogar benefício PRO"
+                submitLabel="Revogar benefício ELITE"
                 destructive
-                confirm="Revogar o benefício PRO? O estabelecimento voltará às regras normais de assinatura e cobrança."
+                confirm="Revogar o benefício ELITE? O estabelecimento voltará às regras normais de assinatura e cobrança."
               >
                 <AdminField label="Motivo da revogação">
                   <textarea name="reason" required minLength={5} maxLength={500} rows={2} className={adminFieldClass} />
@@ -120,8 +120,8 @@ export default async function BusinessDetailPage({ params }: PageProps<"/admin/e
             <AdminActionForm
               action={partnerBenefitAction}
               hidden={{ businessId: business.id, mode: "grant" }}
-              submitLabel="Conceder acesso PRO"
-              confirm="Conceder acesso PRO permanente enquanto durar a parceria? Nenhuma assinatura ou cobrança existente será alterada."
+              submitLabel="Conceder acesso ELITE"
+              confirm="Conceder acesso ELITE gratuito enquanto durar a parceria? Nenhuma assinatura ou cobrança existente será alterada."
             >
               <AdminField label="Motivo da concessão">
                 <textarea name="reason" required minLength={5} maxLength={500} rows={2} className={adminFieldClass} />
