@@ -1,9 +1,11 @@
 import "server-only"
 
+import { attachDatabasePool } from "@vercel/functions"
 import { drizzle } from "drizzle-orm/node-postgres"
-import { Pool } from "pg"
+import type { Pool } from "pg"
 
 import { normalizeSslMode } from "./connection-string"
+import { createPool } from "./pool"
 import * as schema from "./schema"
 
 const connectionString = normalizeSslMode(
@@ -21,8 +23,11 @@ if (!connectionString) {
 
 const globalForDb = globalThis as unknown as { pool?: Pool }
 
-export const pool = globalForDb.pool ?? new Pool({ connectionString, max: 5 })
+export const pool = globalForDb.pool ?? createPool({ connectionString })
 
 if (process.env.NODE_ENV !== "production") globalForDb.pool = pool
+
+// No Fluid compute, fecha as conexões ociosas antes de a instância ser suspensa, evitando sockets mortos ao retomar.
+attachDatabasePool(pool)
 
 export const db = drizzle(pool, { schema })
