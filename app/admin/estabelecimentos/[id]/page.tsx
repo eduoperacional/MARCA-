@@ -88,8 +88,17 @@ export default async function BusinessDetailPage({ params }: PageProps<"/admin/e
               <dt className="text-muted-foreground">Próxima renovação</dt>
               <dd>{formatDate(current.sub.currentPeriodEnd)}</dd>
             </dl>
+          ) : business.partnerBenefitActive ? (
+            <p className="text-sm text-muted-foreground">
+              Sem assinatura paga. Acesso ELITE gratuito pelo benefício de parceiro de divulgação.
+            </p>
           ) : (
             <p className="text-sm text-muted-foreground">Este estabelecimento ainda não assinou nenhum plano.</p>
+          )}
+          {current && business.partnerBenefitActive && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Histórico de assinatura. O acesso atual vem do benefício gratuito de parceiro ELITE.
+            </p>
           )}
         </SectionCard>
       </div>

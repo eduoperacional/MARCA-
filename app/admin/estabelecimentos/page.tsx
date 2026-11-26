@@ -6,11 +6,15 @@ import { Pagination } from "@/components/admin/pagination"
 import { PageHeader } from "@/components/admin/period-tabs"
 import { ToneBadge } from "@/components/admin/tone-badge"
 import { requireAdmin } from "@/lib/admin/auth"
-import { SUBSCRIPTION_STATUS, SUBSCRIPTION_STATUSES } from "@/lib/admin/labels"
-import { listBusinesses, listPlanOptions, PAGE_SIZE } from "@/lib/admin/queries"
+import { businessBillingStatus, PARTNER_BENEFIT_STATUS, SUBSCRIPTION_STATUS, SUBSCRIPTION_STATUSES, type Tone } from "@/lib/admin/labels"
+import { listBusinesses, listPlanOptions, PAGE_SIZE, PARTNER_STATUS_FILTER } from "@/lib/admin/queries"
 import { formatDate, formatDateTime } from "@/lib/format"
 
 export const metadata: Metadata = { title: "Estabelecimentos" }
+
+function BillingStatusBadge({ status }: { status: { label: string; tone: Tone } }) {
+  return <ToneBadge tone={status.tone}>{status.label}</ToneBadge>
+}
 
 const str = (value: string | string[] | undefined) => (typeof value === "string" ? value : undefined)
 
@@ -39,6 +43,7 @@ export default async function BusinessesPage({ searchParams }: PageProps<"/admin
             options: [
               { value: "", label: "Todos" },
               ...SUBSCRIPTION_STATUSES.map((s) => ({ value: s, label: SUBSCRIPTION_STATUS[s].label })),
+              { value: PARTNER_STATUS_FILTER, label: PARTNER_BENEFIT_STATUS.label },
               { value: "none", label: "Sem assinatura" },
               { value: "suspended", label: "Acesso bloqueado" },
             ],
@@ -87,13 +92,12 @@ export default async function BusinessesPage({ searchParams }: PageProps<"/admin
                 <td className="px-4 py-3">{row.plan_name ?? "—"}</td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1.5">
-                    {row.subscription_status ? (
-                      <ToneBadge tone={SUBSCRIPTION_STATUS[row.subscription_status].tone}>
-                        {SUBSCRIPTION_STATUS[row.subscription_status].label}
-                      </ToneBadge>
-                    ) : (
-                      <ToneBadge tone="muted">Sem assinatura</ToneBadge>
-                    )}
+                    <BillingStatusBadge
+                      status={businessBillingStatus({
+                        partnerBenefitActive: row.partner_benefit_active,
+                        subscriptionStatus: row.subscription_status,
+                      })}
+                    />
                     {row.suspended && <ToneBadge tone="danger">Bloqueado</ToneBadge>}
                   </div>
                 </td>

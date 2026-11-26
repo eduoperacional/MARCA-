@@ -1,3 +1,4 @@
+import { PARTNER_BENEFIT_PLAN_LABEL } from "@/lib/billing/partner-benefit"
 import type { BillingInterval, SubscriptionStatus, TransactionStatus } from "@/lib/db/schema"
 
 export type Tone = "brand" | "success" | "warning" | "danger" | "muted"
@@ -14,6 +15,24 @@ export const SUBSCRIPTION_STATUS: Record<SubscriptionStatus, { label: string; to
 }
 
 export const SUBSCRIPTION_STATUSES = Object.keys(SUBSCRIPTION_STATUS) as SubscriptionStatus[]
+
+export const PARTNER_BENEFIT_STATUS: { label: string; tone: Tone } = {
+  label: `Parceiro ${PARTNER_BENEFIT_PLAN_LABEL} · gratuito`,
+  tone: "brand",
+}
+
+/**
+ * Status exibido no admin. O benefício de parceiro prevalece sobre o histórico de assinaturas,
+ * espelhando computeBillingAccess, e nunca aparece como assinatura paga.
+ */
+export function businessBillingStatus(row: {
+  partnerBenefitActive: boolean
+  subscriptionStatus: SubscriptionStatus | null
+}): { label: string; tone: Tone } {
+  if (row.partnerBenefitActive) return PARTNER_BENEFIT_STATUS
+  if (row.subscriptionStatus) return SUBSCRIPTION_STATUS[row.subscriptionStatus]
+  return { label: "Sem assinatura", tone: "muted" }
+}
 
 export const TRANSACTION_STATUS: Record<TransactionStatus, { label: string; tone: Tone }> = {
   approved: { label: "Aprovado", tone: "success" },
