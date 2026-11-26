@@ -11,6 +11,9 @@ const TRANSIENT_MESSAGES = [
   /Connection terminated unexpectedly/i,
   /Client network socket disconnected before secure TLS connection was established/i,
   /Connection terminated due to connection timeout/i,
+  // Enviado pelo proxy do Neon (AuthError::UserTimeout) quando o startup/SCRAM não termina a tempo.
+  // Ocorre antes de qualquer query, então repetir é seguro. Falha de senha (28P01) continua sem retry.
+  /^Authentication timed out$/i,
 ]
 
 export function isTransientConnectionError(error: unknown): boolean {

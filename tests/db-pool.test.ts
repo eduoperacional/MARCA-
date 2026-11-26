@@ -16,7 +16,20 @@ type FakeServer = { port: number; connections: () => number; close: () => Promis
  * - "tls-drop": aceita o SSLRequest ('S') e fecha durante o handshake TLS → "Client network socket disconnected...".
  * - "ok": responde AuthenticationOk + ReadyForQuery, como um Postgres sem senha.
  */
-async function startFakeServer(behaviour: (index: number) => "drop" | "tls-drop" | "ok"): Promise<FakeServer> {
+function errorResponse(fields: Record<string, string>): Buffer {
+  const body = Buffer.concat([
+    ...Object.entries(fields).map(([type, value]) => Buffer.from(`${type}${value}\0`, "utf8")),
+    Buffer.from([0]),
+  ])
+  const header = Buffer.alloc(5)
+  header.write("E", 0)
+  header.writeInt32BE(body.length + 4, 1)
+  return Buffer.concat([header, body])
+}
+
+type Behaviour = "drop" | "tls-drop" | "auth-timeout" | "ok"
+
+async function startFakeServer(behaviour: (index: number) => Behaviour): Promise<FakeServer> {
   let count = 0
   const sockets = new Set<net.Socket>()
   const server = net.createServer((socket) => {
@@ -30,6 +43,10 @@ async function startFakeServer(behaviour: (index: number) => "drop" | "tls-drop"
         socket.write("S")
         // Encerra com FIN ao receber o ClientHello: o mesmo efeito de um proxy que fecha durante o handshake.
         return socket.once("data", () => socket.end())
+      }
+      if (mode === "auth-timeout") {
+        // Mesma resposta do proxy do Neon quando o startup não conclui a autenticação a tempo.
+        return socket.end(errorResponse({ S: "ERROR", M: "Authentication timed out" }))
       }
       const authOk = Buffer.from([0x52, 0, 0, 0, 8, 0, 0, 0, 0])
       const ready = Buffer.from([0x5a, 0, 0, 0, 5, 0x49])
@@ -86,6 +103,19 @@ describe("isTransientConnectionError com os erros reais do pg", () => {
     const error = await captureRealError(server.port, { rejectUnauthorized: false })
     assert.match(error.message, /Client network socket disconnected before secure TLS connection was established/)
     assert.equal(isTransientConnectionError(error), true)
+  })
+
+  test("'Authentication timed out' do proxy chega como DatabaseError do pg e é transitório", async () => {
+    const server = await serve(() => "auth-timeout")
+    const error = await captureRealError(server.port, false)
+    assert.equal(error.message, "Authentication timed out")
+    assert.equal(error.name, "error")
+    assert.equal(isTransientConnectionError(error), true)
+  })
+
+  test("só a mensagem exata do timeout de autenticação é repetida", () => {
+    assert.equal(isTransientConnectionError(new Error("Authentication timed out")), true)
+    assert.equal(isTransientConnectionError(new Error("password authentication failed: Authentication timed out?")), false)
   })
 
   test("erros de query, autenticação e saturação do pool não são repetidos", () => {
@@ -184,6 +214,28 @@ describe("createPool", () => {
     await pool.end()
     assert.equal(server.connections(), 2)
     assert.deepEqual(retried, ["Connection terminated unexpectedly"])
+  })
+
+  test("pool.connect() se recupera de 'Authentication timed out' (erro de /onboarding às 14:24)", async () => {
+    const server = await serve((index) => (index === 0 ? "auth-timeout" : "ok"))
+    const retried: string[] = []
+    const pool = createPool(
+      { connectionString: connectionString(server.port) },
+      { ...noWait, onRetry: (error) => retried.push((error as Error).message) },
+    )
+    const client = await pool.connect()
+    client.release()
+    await pool.end()
+    assert.equal(server.connections(), 2)
+    assert.deepEqual(retried, ["Authentication timed out"])
+  })
+
+  test("timeout de autenticação persistente desiste após o limite e propaga o erro", async () => {
+    const server = await serve(() => "auth-timeout")
+    const pool = createPool({ connectionString: connectionString(server.port) }, { ...noWait, retries: 2 })
+    await assert.rejects(pool.connect(), { message: "Authentication timed out" })
+    await pool.end()
+    assert.equal(server.connections(), 3)
   })
 
   test("pool.connect() com TLS repete quedas no handshake antes de desistir", async () => {
