@@ -13,73 +13,17 @@ import {
   users,
   type SubscriptionStatus,
 } from "@/lib/db/schema"
+import { PAGE_SIZE, queryBusinessList, type BusinessListFilters } from "@/lib/admin/business-list"
 import type { BillingDb } from "@/lib/billing/process-asaas-event"
 
-export const PAGE_SIZE = 20
+export { PAGE_SIZE, PARTNER_STATUS_FILTER, type BusinessListRow } from "@/lib/admin/business-list"
 
 type QueryRows = { rows: Record<string, unknown>[] }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export type BusinessListRow = {
-  id: string
-  name: string
-  slug: string
-  phone: string | null
-  created_at: string
-  owner_name: string | null
-  owner_email: string | null
-  subscription_id: string | null
-  subscription_status: SubscriptionStatus | null
-  plan_name: string | null
-  suspended: boolean
-  last_access: string | null
-  total: number
-}
-
-export async function listBusinesses(
-  filters: { q?: string; status?: string; plan?: string; page: number },
-  db: BillingDb = defaultDb
-) {
-  const q = filters.q?.trim() ? `%${filters.q.trim().replace(/[%_\\]/g, "\\$&")}%` : null
-  const status = filters.status || null
-  const plan = filters.plan || null
-  const offset = (Math.max(1, filters.page) - 1) * PAGE_SIZE
-
-  const result = (await db.execute(sql`
-    WITH latest AS (
-      SELECT DISTINCT ON (s.business_id) s.business_id, s.id, s.status, s.plan_id
-      FROM subscriptions s
-      ORDER BY s.business_id, s.created_at DESC
-    )
-    SELECT b.id, coalesce(b.display_name, b.name) AS name, b.slug, b.phone, b.created_at,
-      u.name AS owner_name, u.email AS owner_email,
-      l.id AS subscription_id, l.status AS subscription_status, p.name AS plan_name,
-      (bs.business_id IS NOT NULL) AS suspended,
-      (SELECT max(se."updatedAt") FROM "session" se
-        WHERE se."userId" IN (SELECT m.user_id FROM business_members m WHERE m.business_id = b.id)) AS last_access,
-      count(*) OVER()::int AS total
-    FROM businesses b
-    LEFT JOIN LATERAL (
-      SELECT m.user_id FROM business_members m WHERE m.business_id = b.id AND m.role = 'owner' LIMIT 1
-    ) om ON true
-    LEFT JOIN "user" u ON u.id = coalesce(b.owner_user_id, om.user_id)
-    LEFT JOIN latest l ON l.business_id = b.id
-    LEFT JOIN plans p ON p.id = l.plan_id
-    LEFT JOIN business_suspensions bs ON bs.business_id = b.id
-    WHERE (${q}::text IS NULL OR b.name ILIKE ${q} OR b.display_name ILIKE ${q} OR b.slug ILIKE ${q} OR u.email ILIKE ${q} OR u.name ILIKE ${q})
-      AND (${plan}::text IS NULL OR p.code = ${plan})
-      AND (
-        ${status}::text IS NULL
-        OR (${status} = 'suspended' AND bs.business_id IS NOT NULL)
-        OR (${status} = 'none' AND l.id IS NULL)
-        OR l.status = ${status}
-      )
-    ORDER BY b.created_at DESC
-    LIMIT ${PAGE_SIZE} OFFSET ${offset}
-  `)) as unknown as QueryRows
-  const rows = result.rows as unknown as BusinessListRow[]
-  return { rows, total: rows[0]?.total ?? 0 }
+export async function listBusinesses(filters: BusinessListFilters, db: BillingDb = defaultDb) {
+  return queryBusinessList(db, filters)
 }
 
 export async function listPlanOptions(db: BillingDb = defaultDb) {
